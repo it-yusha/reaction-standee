@@ -4,6 +4,19 @@ import react from "@vitejs/plugin-react";
 const reactions = new Set(["normal", "joy", "surprised", "troubled", "explain"]);
 let sharedReaction = "normal";
 let updatedAt = Date.now();
+const clients = new Set<{
+  write: (chunk: string) => void;
+  end: () => void;
+}>();
+
+function reactionPayload() {
+  return JSON.stringify({ reaction: sharedReaction, updatedAt });
+}
+
+function broadcastReaction() {
+  const message = `data: ${reactionPayload()}\n\n`;
+  clients.forEach((client) => client.write(message));
+}
 
 export default defineConfig({
   plugins: [
@@ -13,8 +26,26 @@ export default defineConfig({
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
           const pathname = req.url?.split("?")[0];
-          if (pathname !== "/api/reaction" && pathname !== "/api/reaction/") {
+          if (
+            pathname !== "/api/reaction" &&
+            pathname !== "/api/reaction/" &&
+            pathname !== "/api/reaction/events" &&
+            pathname !== "/api/reaction/events/"
+          ) {
             next();
+            return;
+          }
+
+          if (pathname === "/api/reaction/events" || pathname === "/api/reaction/events/") {
+            res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+            res.setHeader("Cache-Control", "no-cache, no-transform");
+            res.setHeader("Connection", "keep-alive");
+            res.write(`data: ${reactionPayload()}\n\n`);
+            clients.add(res);
+            req.on("close", () => {
+              clients.delete(res);
+              res.end();
+            });
             return;
           }
 
@@ -22,7 +53,7 @@ export default defineConfig({
           res.setHeader("Cache-Control", "no-store");
 
           if (req.method === "GET") {
-            res.end(JSON.stringify({ reaction: sharedReaction, updatedAt }));
+            res.end(reactionPayload());
             return;
           }
 
@@ -46,7 +77,8 @@ export default defineConfig({
               }
               sharedReaction = parsed.reaction;
               updatedAt = Date.now();
-              res.end(JSON.stringify({ reaction: sharedReaction, updatedAt }));
+              broadcastReaction();
+              res.end(reactionPayload());
             } catch {
               res.statusCode = 400;
               res.end(JSON.stringify({ error: "Invalid JSON" }));

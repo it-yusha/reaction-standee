@@ -58,6 +58,7 @@ const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
 const SHARED_REACTION_URL = "/api/reaction";
+const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const AVATAR_SYNC_INTERVAL_MS = 50;
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
@@ -264,7 +265,7 @@ async function publishSharedReaction(reaction: Reaction) {
 }
 
 async function readSharedReaction(): Promise<SharedReactionPayload | undefined> {
-  const response = await fetch(SHARED_REACTION_URL, { cache: "no-store" });
+  const response = await fetch(`${SHARED_REACTION_URL}?t=${Date.now()}`, { cache: "no-store" });
   if (!response.ok) return undefined;
   const payload = (await response.json()) as Partial<SharedReactionPayload>;
   if (!payload.reaction || !reactions.some((item) => item.key === payload.reaction)) return undefined;
@@ -332,24 +333,54 @@ function App() {
     if (route !== "avatar") return;
     let cancelled = false;
     let lastUpdatedAt = 0;
+    let fallbackInterval = 0;
+
+    const applyPayload = (payload: SharedReactionPayload | undefined) => {
+      if (!cancelled && payload && payload.updatedAt !== lastUpdatedAt) {
+        lastUpdatedAt = payload.updatedAt;
+        setReaction(payload.reaction);
+      }
+    };
 
     const syncReaction = () => {
       void readSharedReaction()
-        .then((payload) => {
-          if (!cancelled && payload && payload.updatedAt !== lastUpdatedAt) {
-            lastUpdatedAt = payload.updatedAt;
-            setReaction(payload.reaction);
-          }
-        })
+        .then(applyPayload)
         .catch(() => undefined);
     };
 
     syncReaction();
-    const interval = window.setInterval(syncReaction, AVATAR_SYNC_INTERVAL_MS);
+    const startFallbackPolling = () => {
+      if (!fallbackInterval) {
+        fallbackInterval = window.setInterval(syncReaction, AVATAR_SYNC_INTERVAL_MS);
+      }
+    };
+
+    if (!("EventSource" in window)) {
+      startFallbackPolling();
+      return () => {
+        cancelled = true;
+        window.clearInterval(fallbackInterval);
+      };
+    }
+
+    const events = new EventSource(SHARED_REACTION_EVENTS_URL);
+    events.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as SharedReactionPayload;
+        if (!payload.reaction || !reactions.some((item) => item.key === payload.reaction)) return;
+        applyPayload(payload);
+      } catch {
+        startFallbackPolling();
+      }
+    };
+    events.onerror = () => {
+      startFallbackPolling();
+    };
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      events.close();
+      window.clearInterval(fallbackInterval);
     };
   }, [route]);
 
