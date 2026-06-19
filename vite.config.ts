@@ -11,7 +11,13 @@ export default defineConfig({
     {
       name: "reaction-standee-local-api",
       configureServer(server) {
-        server.middlewares.use("/api/reaction", (req, res) => {
+        server.middlewares.use((req, res, next) => {
+          const pathname = req.url?.split("?")[0];
+          if (pathname !== "/api/reaction" && pathname !== "/api/reaction/") {
+            next();
+            return;
+          }
+
           res.setHeader("Content-Type", "application/json; charset=utf-8");
           res.setHeader("Cache-Control", "no-store");
 
