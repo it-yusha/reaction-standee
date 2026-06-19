@@ -59,6 +59,12 @@ button:disabled:hover {
   background: #263244;
 }
 
+.headerLinks {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .danger {
   width: 100%;
   margin: 0 0 12px;
@@ -442,7 +448,8 @@ button:disabled:hover {
 
 .avatar .trackingVideo,
 .avatar + .trackingVideo,
-.app.avatar .trackingVideo {
+.app.avatar .trackingVideo,
+.app.capture .trackingVideo {
   display: none;
 }
 

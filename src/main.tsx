@@ -14,6 +14,7 @@ type Reaction = "normal" | "joy" | "surprised" | "troubled" | "explain";
 type ImageSlot = Reaction;
 type BackgroundMode = "transparent" | "green" | "color";
 type Sensitivity = "low" | "standard" | "high";
+type AppRoute = "settings" | "avatar" | "capture";
 
 type ReactionImages = Record<ImageSlot, string>;
 
@@ -295,7 +296,8 @@ async function readSharedReaction(): Promise<SharedReactionPayload | undefined> 
 }
 
 function App() {
-  const route = window.location.pathname === "/avatar" ? "avatar" : "settings";
+  const route: AppRoute =
+    window.location.pathname === "/avatar" ? "avatar" : window.location.pathname === "/capture" ? "capture" : "settings";
   const [settings, setSettings] = useState<Settings>(() => readSettings());
   const [reaction, setReaction] = useState<Reaction>("normal");
   const [debug, setDebug] = useState<TrackingDebug>({
@@ -344,7 +346,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (route !== "settings") return;
+    if (route === "avatar") return;
     void publishSharedState(reaction, settings).catch(() => undefined);
   }, [reaction, route, settings]);
 
@@ -405,7 +407,7 @@ function App() {
   }, [route]);
 
   usePoseTracking({
-    enabled: route === "settings" && settings.trackingEnabled,
+    enabled: route !== "avatar" && settings.trackingEnabled,
     deviceId: settings.selectedDeviceId,
     sensitivity: settings.sensitivity,
     videoRef,
@@ -783,12 +785,13 @@ function midpoint(a: NormalizedLandmark, b: NormalizedLandmark): NormalizedLandm
   };
 }
 
-function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route: "settings" | "avatar"; settings: Settings }) {
+function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route: AppRoute; settings: Settings }) {
   const image = settings.images[reaction];
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
-  const size = route === "avatar" ? settings.avatarSize : settings.size;
-  const x = route === "avatar" ? settings.avatarX : settings.x;
-  const y = route === "avatar" ? settings.avatarY : settings.y;
+  const useAvatarLayout = route !== "settings";
+  const size = useAvatarLayout ? settings.avatarSize : settings.size;
+  const x = useAvatarLayout ? settings.avatarX : settings.x;
+  const y = useAvatarLayout ? settings.avatarY : settings.y;
   const staticImage = `/reactions/${reaction}.png`;
 
   return (
@@ -973,9 +976,14 @@ function SettingsPanel({
           <h1>Reaction Standee</h1>
           <p>ポーズで立ち絵リアクションを呼び出す</p>
         </div>
-        <a className="avatarLink" href="/avatar" target="_blank" rel="noreferrer">
-          /avatar
-        </a>
+        <div className="headerLinks">
+          <a className="avatarLink" href="/capture" target="_blank" rel="noreferrer">
+            /capture
+          </a>
+          <a className="avatarLink" href="/avatar" target="_blank" rel="noreferrer">
+            /avatar
+          </a>
+        </div>
       </header>
 
       <section className="section">
