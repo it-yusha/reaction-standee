@@ -49,9 +49,15 @@ type Classification = {
   reason: string;
 };
 
+type SharedReactionPayload = {
+  reaction: Reaction;
+  updatedAt: number;
+};
+
 const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
+const SHARED_REACTION_URL = "/api/reaction";
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 const HAND_MODEL_URL =
@@ -248,6 +254,25 @@ async function clearReactionImages() {
   }
 }
 
+async function publishSharedReaction(reaction: Reaction) {
+  await fetch(SHARED_REACTION_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reaction }),
+  });
+}
+
+async function readSharedReaction(): Promise<SharedReactionPayload | undefined> {
+  const response = await fetch(SHARED_REACTION_URL, { cache: "no-store" });
+  if (!response.ok) return undefined;
+  const payload = (await response.json()) as Partial<SharedReactionPayload>;
+  if (!payload.reaction || !reactions.some((item) => item.key === payload.reaction)) return undefined;
+  return {
+    reaction: payload.reaction,
+    updatedAt: typeof payload.updatedAt === "number" ? payload.updatedAt : 0,
+  };
+}
+
 function App() {
   const route = window.location.pathname === "/avatar" ? "avatar" : "settings";
   const [settings, setSettings] = useState<Settings>(() => readSettings());
@@ -297,8 +322,34 @@ function App() {
       .catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    if (route !== "settings") return;
+    void publishSharedReaction(reaction).catch(() => undefined);
+  }, [reaction, route]);
+
+  useEffect(() => {
+    if (route !== "avatar") return;
+    let cancelled = false;
+
+    const syncReaction = () => {
+      void readSharedReaction()
+        .then((payload) => {
+          if (!cancelled && payload) setReaction(payload.reaction);
+        })
+        .catch(() => undefined);
+    };
+
+    syncReaction();
+    const interval = window.setInterval(syncReaction, 150);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [route]);
+
   usePoseTracking({
-    enabled: settings.trackingEnabled,
+    enabled: route === "settings" && settings.trackingEnabled,
     deviceId: settings.selectedDeviceId,
     sensitivity: settings.sensitivity,
     videoRef,
