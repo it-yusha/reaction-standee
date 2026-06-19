@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900">
+  <defs>
+    <radialGradient id="wave" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.54" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.66" stop-color="#ffffff" stop-opacity="0.86"/>
+      <stop offset="0.72" stop-color="#bdefff" stop-opacity="0.58"/>
+      <stop offset="0.78" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <circle cx="450" cy="450" r="380" fill="url(#wave)" filter="url(#glow)"/>
+  <g stroke="#ffffff" stroke-width="15" stroke-linecap="round" opacity="0.76" filter="url(#glow)">
+    <path d="M186 214l64 70"/>
+    <path d="M674 190l-58 76"/>
+    <path d="M164 680l78-56"/>
+    <path d="M730 648l-82-52"/>
+    <path d="M450 92v88"/>
+  </g>
+</svg>
