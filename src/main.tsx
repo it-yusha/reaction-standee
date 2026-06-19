@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   FilesetResolver,
@@ -60,6 +60,10 @@ type SharedAvatarSettings = Pick<
   Settings,
   "avatarSize" | "avatarX" | "avatarY" | "outlineEnabled" | "outlineWidth" | "backgroundMode" | "backgroundColor"
 >;
+
+type AppErrorBoundaryState = {
+  error: Error | undefined;
+};
 
 const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
@@ -1243,8 +1247,32 @@ function Range({
   );
 }
 
+class AppErrorBoundary extends React.Component<{ children: ReactNode }, AppErrorBoundaryState> {
+  state: AppErrorBoundaryState = { error: undefined };
+
+  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="errorFallback">
+          <h1>画面の表示に失敗しました</h1>
+          <p>ページを再読み込みしてください。繰り返す場合は、Safariを再起動してからもう一度開いてください。</p>
+          <code>{this.state.error.message}</code>
+        </main>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </React.StrictMode>,
 );
