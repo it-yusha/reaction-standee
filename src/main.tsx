@@ -52,7 +52,13 @@ type Classification = {
 type SharedReactionPayload = {
   reaction: Reaction;
   updatedAt: number;
+  settings?: SharedAvatarSettings;
 };
+
+type SharedAvatarSettings = Pick<
+  Settings,
+  "avatarSize" | "avatarX" | "avatarY" | "outlineEnabled" | "outlineWidth" | "backgroundMode" | "backgroundColor"
+>;
 
 const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
@@ -173,6 +179,18 @@ function toStoredSettings(settings: Settings): StoredSettings {
   };
 }
 
+function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
+  return {
+    avatarSize: settings.avatarSize,
+    avatarX: settings.avatarX,
+    avatarY: settings.avatarY,
+    outlineEnabled: settings.outlineEnabled,
+    outlineWidth: settings.outlineWidth,
+    backgroundMode: settings.backgroundMode,
+    backgroundColor: settings.backgroundColor,
+  };
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -256,11 +274,11 @@ async function clearReactionImages() {
   }
 }
 
-async function publishSharedReaction(reaction: Reaction) {
+async function publishSharedState(reaction: Reaction, settings: Settings) {
   await fetch(SHARED_REACTION_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reaction }),
+    body: JSON.stringify({ reaction, settings: toSharedAvatarSettings(settings) }),
   });
 }
 
@@ -272,6 +290,7 @@ async function readSharedReaction(): Promise<SharedReactionPayload | undefined> 
   return {
     reaction: payload.reaction,
     updatedAt: typeof payload.updatedAt === "number" ? payload.updatedAt : 0,
+    settings: payload.settings,
   };
 }
 
@@ -326,8 +345,8 @@ function App() {
 
   useEffect(() => {
     if (route !== "settings") return;
-    void publishSharedReaction(reaction).catch(() => undefined);
-  }, [reaction, route]);
+    void publishSharedState(reaction, settings).catch(() => undefined);
+  }, [reaction, route, settings]);
 
   useEffect(() => {
     if (route !== "avatar") return;
@@ -339,6 +358,7 @@ function App() {
       if (!cancelled && payload && payload.updatedAt !== lastUpdatedAt) {
         lastUpdatedAt = payload.updatedAt;
         setReaction(payload.reaction);
+        if (payload.settings) updateSettings(payload.settings);
       }
     };
 

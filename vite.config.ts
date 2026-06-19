@@ -4,13 +4,22 @@ import react from "@vitejs/plugin-react";
 const reactions = new Set(["normal", "joy", "surprised", "troubled", "explain"]);
 let sharedReaction = "normal";
 let updatedAt = Date.now();
+let sharedSettings = {
+  avatarSize: 620,
+  avatarX: 0,
+  avatarY: 0,
+  outlineEnabled: true,
+  outlineWidth: 3,
+  backgroundMode: "transparent",
+  backgroundColor: "#111827",
+};
 const clients = new Set<{
   write: (chunk: string) => void;
   end: () => void;
 }>();
 
 function reactionPayload() {
-  return JSON.stringify({ reaction: sharedReaction, updatedAt });
+  return JSON.stringify({ reaction: sharedReaction, updatedAt, settings: sharedSettings });
 }
 
 function broadcastReaction() {
@@ -69,13 +78,19 @@ export default defineConfig({
           });
           req.on("end", () => {
             try {
-              const parsed = JSON.parse(body) as { reaction?: string };
+              const parsed = JSON.parse(body) as { reaction?: string; settings?: Partial<typeof sharedSettings> };
               if (!parsed.reaction || !reactions.has(parsed.reaction)) {
                 res.statusCode = 400;
                 res.end(JSON.stringify({ error: "Invalid reaction" }));
                 return;
               }
               sharedReaction = parsed.reaction;
+              if (parsed.settings) {
+                sharedSettings = {
+                  ...sharedSettings,
+                  ...parsed.settings,
+                };
+              }
               updatedAt = Date.now();
               broadcastReaction();
               res.end(reactionPayload());
