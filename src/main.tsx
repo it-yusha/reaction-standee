@@ -58,6 +58,7 @@ const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
 const SHARED_REACTION_URL = "/api/reaction";
+const AVATAR_SYNC_INTERVAL_MS = 50;
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 const HAND_MODEL_URL =
@@ -330,17 +331,21 @@ function App() {
   useEffect(() => {
     if (route !== "avatar") return;
     let cancelled = false;
+    let lastUpdatedAt = 0;
 
     const syncReaction = () => {
       void readSharedReaction()
         .then((payload) => {
-          if (!cancelled && payload) setReaction(payload.reaction);
+          if (!cancelled && payload && payload.updatedAt !== lastUpdatedAt) {
+            lastUpdatedAt = payload.updatedAt;
+            setReaction(payload.reaction);
+          }
         })
         .catch(() => undefined);
     };
 
     syncReaction();
-    const interval = window.setInterval(syncReaction, 150);
+    const interval = window.setInterval(syncReaction, AVATAR_SYNC_INTERVAL_MS);
 
     return () => {
       cancelled = true;
