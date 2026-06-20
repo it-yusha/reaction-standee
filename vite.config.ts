@@ -10,8 +10,10 @@ let sharedSettings = {
   avatarY: 0,
   outlineEnabled: true,
   outlineWidth: 3,
+  canvasAspectRatio: "9:16",
   backgroundMode: "transparent",
   backgroundColor: "#111827",
+  backgroundImage: undefined as string | undefined,
 };
 const clients = new Set<{
   write: (chunk: string) => void;

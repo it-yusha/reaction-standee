@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   FilesetResolver,
@@ -12,9 +12,10 @@ import "./styles.css";
 
 type Reaction = "normal" | "joy" | "surprised" | "troubled" | "explain";
 type ImageSlot = Reaction;
-type BackgroundMode = "transparent" | "green" | "color";
+type BackgroundMode = "transparent" | "green" | "color" | "image";
 type Sensitivity = "low" | "standard" | "high";
 type AppRoute = "settings" | "avatar" | "capture";
+type CanvasAspectRatio = "9:16" | "16:9";
 
 type ReactionImages = Record<ImageSlot, string>;
 
@@ -30,12 +31,14 @@ type Settings = {
   avatarY: number;
   outlineEnabled: boolean;
   outlineWidth: number;
+  canvasAspectRatio: CanvasAspectRatio;
   backgroundMode: BackgroundMode;
   backgroundColor: string;
+  backgroundImage?: string;
   images: Partial<ReactionImages>;
 };
 
-type StoredSettings = Omit<Settings, "images">;
+type StoredSettings = Omit<Settings, "images" | "backgroundImage">;
 
 type TrackingDebug = {
   candidate: Reaction;
@@ -58,7 +61,15 @@ type SharedReactionPayload = {
 
 type SharedAvatarSettings = Pick<
   Settings,
-  "avatarSize" | "avatarX" | "avatarY" | "outlineEnabled" | "outlineWidth" | "backgroundMode" | "backgroundColor"
+  | "avatarSize"
+  | "avatarX"
+  | "avatarY"
+  | "outlineEnabled"
+  | "outlineWidth"
+  | "canvasAspectRatio"
+  | "backgroundMode"
+  | "backgroundColor"
+  | "backgroundImage"
 >;
 
 type AppErrorBoundaryState = {
@@ -68,6 +79,7 @@ type AppErrorBoundaryState = {
 const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
+const BACKGROUND_IMAGE_KEY = "__background__";
 const SHARED_REACTION_URL = "/api/reaction";
 const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -91,6 +103,11 @@ const imageSlots: Array<{ key: ImageSlot; label: string; file: string }> = [
   { key: "surprised", label: "驚き", file: "surprised.png" },
   { key: "troubled", label: "困惑", file: "troubled.png" },
   { key: "explain", label: "説明", file: "explain.png" },
+];
+
+const canvasAspectRatios: Array<{ key: CanvasAspectRatio; label: string; value: number }> = [
+  { key: "9:16", label: "9:16 ショート動画", value: 9 / 16 },
+  { key: "16:9", label: "16:9 横動画", value: 16 / 9 },
 ];
 
 const sensitivityProfile: Record<
@@ -146,8 +163,10 @@ const defaultSettings: Settings = {
   avatarY: 0,
   outlineEnabled: true,
   outlineWidth: 3,
+  canvasAspectRatio: "9:16",
   backgroundMode: "transparent",
   backgroundColor: "#111827",
+  backgroundImage: undefined,
   images: {},
 };
 
@@ -159,6 +178,7 @@ function readSettings(): Settings {
     return {
       ...defaultSettings,
       ...parsed,
+      backgroundImage: undefined,
       images: {},
     };
   } catch {
@@ -179,6 +199,7 @@ function toStoredSettings(settings: Settings): StoredSettings {
     avatarY: settings.avatarY,
     outlineEnabled: settings.outlineEnabled,
     outlineWidth: settings.outlineWidth,
+    canvasAspectRatio: settings.canvasAspectRatio,
     backgroundMode: settings.backgroundMode,
     backgroundColor: settings.backgroundColor,
   };
@@ -191,8 +212,10 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     avatarY: settings.avatarY,
     outlineEnabled: settings.outlineEnabled,
     outlineWidth: settings.outlineWidth,
+    canvasAspectRatio: settings.canvasAspectRatio,
     backgroundMode: settings.backgroundMode,
     backgroundColor: settings.backgroundColor,
+    backgroundImage: settings.backgroundImage,
   };
 }
 
@@ -229,7 +252,17 @@ async function loadReactionImages(): Promise<Partial<ReactionImages>> {
   }
 }
 
-function readImageFromDb(db: IDBDatabase, key: ImageSlot): Promise<string | undefined> {
+async function loadBackgroundImage(): Promise<string | undefined> {
+  if (!("indexedDB" in window)) return undefined;
+  const db = await openImageDb();
+  try {
+    return readImageFromDb(db, BACKGROUND_IMAGE_KEY);
+  } finally {
+    db.close();
+  }
+}
+
+function readImageFromDb(db: IDBDatabase, key: ImageSlot | typeof BACKGROUND_IMAGE_KEY): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const request = db.transaction(IMAGE_STORE_NAME, "readonly").objectStore(IMAGE_STORE_NAME).get(key);
     request.onsuccess = () => resolve(typeof request.result === "string" ? request.result : undefined);
@@ -237,7 +270,7 @@ function readImageFromDb(db: IDBDatabase, key: ImageSlot): Promise<string | unde
   });
 }
 
-async function saveReactionImage(key: ImageSlot, dataUrl: string) {
+async function saveImageToDb(key: ImageSlot | typeof BACKGROUND_IMAGE_KEY, dataUrl: string) {
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -251,7 +284,23 @@ async function saveReactionImage(key: ImageSlot, dataUrl: string) {
   }
 }
 
+async function saveReactionImage(key: ImageSlot, dataUrl: string) {
+  return saveImageToDb(key, dataUrl);
+}
+
 async function deleteReactionImage(key: ImageSlot) {
+  return deleteImageFromDb(key);
+}
+
+async function saveBackgroundImage(dataUrl: string) {
+  return saveImageToDb(BACKGROUND_IMAGE_KEY, dataUrl);
+}
+
+async function deleteBackgroundImage() {
+  return deleteImageFromDb(BACKGROUND_IMAGE_KEY);
+}
+
+async function deleteImageFromDb(key: ImageSlot | typeof BACKGROUND_IMAGE_KEY) {
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -328,9 +377,9 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadReactionImages()
-      .then((images) => {
-        if (!cancelled) updateSettings({ images });
+    void Promise.all([loadReactionImages(), loadBackgroundImage()])
+      .then(([images, backgroundImage]) => {
+        if (!cancelled) updateSettings({ images, backgroundImage });
       })
       .catch(() => {
         if (!cancelled) setCameraError("保存済み画像の読み込みに失敗しました。");
@@ -421,14 +470,8 @@ function App() {
     onError: setCameraError,
   });
 
-  const background = useMemo(() => {
-    if (settings.backgroundMode === "transparent") return "transparent";
-    if (settings.backgroundMode === "green") return "#00ff00";
-    return settings.backgroundColor;
-  }, [settings.backgroundColor, settings.backgroundMode]);
-
   return (
-    <main className={`app ${route}`} style={{ background }}>
+    <main className={`app ${route}`}>
       <AvatarStage reaction={reaction} route={route} settings={settings} />
       <video ref={videoRef} className="trackingVideo" muted playsInline />
 
@@ -789,6 +832,23 @@ function midpoint(a: NormalizedLandmark, b: NormalizedLandmark): NormalizedLandm
   };
 }
 
+function getAspectRatioValue(aspectRatio: CanvasAspectRatio) {
+  return canvasAspectRatios.find((item) => item.key === aspectRatio)?.value ?? 9 / 16;
+}
+
+function getAspectRatioCss(aspectRatio: CanvasAspectRatio) {
+  return aspectRatio.replace(":", " / ");
+}
+
+function getFrameBackground(settings: Settings) {
+  if (settings.backgroundMode === "transparent") return "transparent";
+  if (settings.backgroundMode === "green") return "#00ff00";
+  if (settings.backgroundMode === "image" && settings.backgroundImage) {
+    return `center / cover no-repeat url("${settings.backgroundImage}")`;
+  }
+  return settings.backgroundColor;
+}
+
 function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route: AppRoute; settings: Settings }) {
   const image = settings.images[reaction];
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
@@ -797,25 +857,36 @@ function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route:
   const x = useAvatarLayout ? settings.avatarX : settings.x;
   const y = useAvatarLayout ? settings.avatarY : settings.y;
   const staticImage = `/reactions/${reaction}.png`;
+  const frameBackground = getFrameBackground(settings);
+  const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
 
   return (
     <section className={`stage reaction-${reaction}`} aria-label="avatar">
       <div
-        className="avatarSlot"
+        className="recordingFrame"
         style={{
-          width: size,
-          transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
+          ["--canvas-ratio" as string]: aspectRatioValue,
+          ["--canvas-aspect" as string]: getAspectRatioCss(settings.canvasAspectRatio),
+          background: frameBackground,
         }}
       >
-        <div key={reaction} className="avatar">
-          <ReactionEffects reaction={reaction} />
-          <AvatarImage
-            alt={label}
-            outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
-            primarySrc={image}
-            reaction={reaction}
-            staticSrc={staticImage}
-          />
+        <div
+          className="avatarSlot"
+          style={{
+            width: size,
+            transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
+          }}
+        >
+          <div key={reaction} className="avatar">
+            <ReactionEffects reaction={reaction} />
+            <AvatarImage
+              alt={label}
+              outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
+              primarySrc={image}
+              reaction={reaction}
+              staticSrc={staticImage}
+            />
+          </div>
         </div>
       </div>
     </section>
@@ -970,6 +1041,42 @@ function SettingsPanel({
         setImageMessage("画像の削除に失敗しました。");
         console.error(error);
         console.error(`${slot} image could not be deleted.`);
+      });
+  };
+
+  const handleBackgroundUpload = (file: File | undefined) => {
+    if (!file) return;
+    setImageMessage(`${file.name} を背景画像として読み込み中...`);
+    void readFileAsDataUrl(file)
+      .then((dataUrl) => {
+        onChange({
+          backgroundImage: dataUrl,
+          backgroundMode: "image",
+        });
+        return saveBackgroundImage(dataUrl).then(() => {
+          setImageMessage(`${file.name} を背景画像として登録しました。`);
+        });
+      })
+      .catch((error) => {
+        setImageMessage("背景画像の登録に失敗しました。容量が大きすぎる可能性があります。");
+        console.error(error);
+        console.error("Background image could not be saved.");
+      });
+  };
+
+  const handleDeleteBackground = () => {
+    void deleteBackgroundImage()
+      .then(() => {
+        onChange({
+          backgroundImage: undefined,
+          backgroundMode: settings.backgroundMode === "image" ? "green" : settings.backgroundMode,
+        });
+        setImageMessage("背景画像を削除しました。");
+      })
+      .catch((error) => {
+        setImageMessage("背景画像の削除に失敗しました。");
+        console.error(error);
+        console.error("Background image could not be deleted.");
       });
   };
 
@@ -1130,6 +1237,19 @@ function SettingsPanel({
           onChange={(outlineWidth) => onChange({ outlineWidth })}
         />
         <label>
+          録画比率
+          <select
+            value={settings.canvasAspectRatio}
+            onChange={(event) => onChange({ canvasAspectRatio: event.target.value as CanvasAspectRatio })}
+          >
+            {canvasAspectRatios.map((item) => (
+              <option key={item.key} value={item.key}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           背景
           <select
             value={settings.backgroundMode}
@@ -1138,8 +1258,41 @@ function SettingsPanel({
             <option value="transparent">透明</option>
             <option value="green">グリーンバック</option>
             <option value="color">任意色</option>
+            <option value="image">背景画像</option>
           </select>
         </label>
+        <div className="fileSlot backgroundFileSlot">
+          <span>
+            背景画像
+            <small>画面全体にcover表示</small>
+            <small className={settings.backgroundImage ? "savedBadge" : "emptyBadge"}>
+              {settings.backgroundImage ? "登録済み" : "未登録"}
+            </small>
+          </span>
+          <div className="fileActions">
+            <label className="filePicker">
+              画像を選択
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/*"
+                onClick={(event) => {
+                  event.currentTarget.value = "";
+                }}
+                onChange={(event) => {
+                  handleBackgroundUpload(event.target.files?.[0]);
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="deleteImageButton"
+              disabled={!settings.backgroundImage}
+              onClick={handleDeleteBackground}
+            >
+              削除
+            </button>
+          </div>
+        </div>
         {settings.backgroundMode === "color" && (
           <label>
             背景色

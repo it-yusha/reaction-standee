@@ -82,6 +82,7 @@ button:disabled:hover {
   min-width: 100vw;
   min-height: 100vh;
   overflow: hidden;
+  background: #090d14;
 }
 
 .errorFallback {
@@ -122,15 +123,28 @@ button:disabled:hover {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.recordingFrame {
+  --canvas-ratio: 0.5625;
+  --canvas-aspect: 9 / 16;
+  position: relative;
+  width: min(100vw, calc(100vh * var(--canvas-ratio)));
+  height: min(100vh, calc(100vw / var(--canvas-ratio)));
+  aspect-ratio: var(--canvas-aspect);
+  overflow: hidden;
+  background: transparent;
 }
 
 .avatarSlot {
   position: absolute;
   left: 50%;
   top: 50%;
-  max-width: 96vw;
-  height: 96vh;
-  max-height: 96vh;
+  max-width: 96%;
+  height: 96%;
+  max-height: 96%;
   display: flex;
   align-items: center;
   justify-content: center;
