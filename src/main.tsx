@@ -17,19 +17,26 @@ type Sensitivity = "low" | "standard" | "high";
 type AppRoute = "settings" | "avatar" | "capture";
 type CanvasAspectRatio = "9:16" | "16:9";
 type LifeIntensity = "subtle" | "standard" | "strong";
+type MouthShape = "closed" | "smallOpen" | "wideOpen";
+type MouthImageSlot = Exclude<MouthShape, "closed">;
 
 type ReactionImages = Record<ImageSlot, string>;
-type ImageDbKey = ImageSlot | typeof BACKGROUND_IMAGE_KEY | typeof NORMAL_BLINK_IMAGE_KEY;
+type MouthImages = Partial<Record<MouthImageSlot, string>>;
+type ImageDbKey = string;
 
-type BlinkCrop = {
+type CropRect = {
   x: number;
   y: number;
   width: number;
   height: number;
 };
 
+type BlinkCrop = CropRect;
+type MouthCrop = CropRect;
+
 type Settings = {
   selectedDeviceId: string;
+  selectedAudioDeviceId: string;
   trackingEnabled: boolean;
   sensitivity: Sensitivity;
   size: number;
@@ -50,15 +57,26 @@ type Settings = {
   lifeIntensity: LifeIntensity;
   normalBlinkImage?: string;
   blinkCrop: BlinkCrop;
+  lipSyncEnabled: boolean;
+  audioInputEnabled: boolean;
+  mouthThreshold: number;
+  mouthCrop: MouthCrop;
+  mouthImages: MouthImages;
   images: Partial<ReactionImages>;
 };
 
-type StoredSettings = Omit<Settings, "images" | "backgroundImage" | "normalBlinkImage">;
+type StoredSettings = Omit<Settings, "images" | "backgroundImage" | "normalBlinkImage" | "mouthImages">;
 
 type TrackingDebug = {
   candidate: Reaction;
   stableForMs: number;
   confidence: number;
+  status: string;
+};
+
+type AudioDebug = {
+  volume: number;
+  mouthShape: MouthShape;
   status: string;
 };
 
@@ -70,6 +88,8 @@ type Classification = {
 
 type SharedReactionPayload = {
   reaction: Reaction;
+  mouthShape?: MouthShape;
+  audioLevel?: number;
   updatedAt: number;
   settings?: SharedAvatarSettings;
 };
@@ -91,6 +111,11 @@ type SharedAvatarSettings = Pick<
   | "lifeIntensity"
   | "normalBlinkImage"
   | "blinkCrop"
+  | "lipSyncEnabled"
+  | "audioInputEnabled"
+  | "mouthThreshold"
+  | "mouthCrop"
+  | "mouthImages"
 >;
 
 type AppErrorBoundaryState = {
@@ -102,6 +127,10 @@ const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
 const BACKGROUND_IMAGE_KEY = "__background__";
 const NORMAL_BLINK_IMAGE_KEY = "__normal_blink__";
+const MOUTH_IMAGE_KEYS: Record<MouthImageSlot, string> = {
+  smallOpen: "__mouth_small_open__",
+  wideOpen: "__mouth_wide_open__",
+};
 const SHARED_REACTION_URL = "/api/reaction";
 const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -125,6 +154,11 @@ const imageSlots: Array<{ key: ImageSlot; label: string; file: string }> = [
   { key: "surprised", label: "驚き", file: "surprised.png" },
   { key: "troubled", label: "困惑", file: "troubled.png" },
   { key: "explain", label: "説明", file: "explain.png" },
+];
+
+const mouthImageSlots: Array<{ key: MouthImageSlot; label: string; file: string }> = [
+  { key: "smallOpen", label: "小開き口", file: "mouth_small_open.png" },
+  { key: "wideOpen", label: "大開き口", file: "mouth_wide_open.png" },
 ];
 
 const canvasAspectRatios: Array<{ key: CanvasAspectRatio; label: string; value: number }> = [
@@ -175,6 +209,7 @@ const sensitivityProfile: Record<
 
 const defaultSettings: Settings = {
   selectedDeviceId: "",
+  selectedAudioDeviceId: "",
   trackingEnabled: false,
   sensitivity: "standard",
   size: 620,
@@ -200,6 +235,16 @@ const defaultSettings: Settings = {
     width: 28,
     height: 12,
   },
+  lipSyncEnabled: false,
+  audioInputEnabled: false,
+  mouthThreshold: 28,
+  mouthCrop: {
+    x: 43,
+    y: 35,
+    width: 15,
+    height: 9,
+  },
+  mouthImages: {},
   images: {},
 };
 
@@ -213,6 +258,7 @@ function readSettings(): Settings {
       ...parsed,
       backgroundImage: undefined,
       normalBlinkImage: undefined,
+      mouthImages: {},
       images: {},
     };
   } catch {
@@ -223,6 +269,7 @@ function readSettings(): Settings {
 function toStoredSettings(settings: Settings): StoredSettings {
   return {
     selectedDeviceId: settings.selectedDeviceId,
+    selectedAudioDeviceId: settings.selectedAudioDeviceId,
     trackingEnabled: settings.trackingEnabled,
     sensitivity: settings.sensitivity,
     size: settings.size,
@@ -241,6 +288,10 @@ function toStoredSettings(settings: Settings): StoredSettings {
     motionEnabled: settings.motionEnabled,
     lifeIntensity: settings.lifeIntensity,
     blinkCrop: settings.blinkCrop,
+    lipSyncEnabled: settings.lipSyncEnabled,
+    audioInputEnabled: settings.audioInputEnabled,
+    mouthThreshold: settings.mouthThreshold,
+    mouthCrop: settings.mouthCrop,
   };
 }
 
@@ -261,6 +312,11 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     lifeIntensity: settings.lifeIntensity,
     normalBlinkImage: settings.normalBlinkImage,
     blinkCrop: settings.blinkCrop,
+    lipSyncEnabled: settings.lipSyncEnabled,
+    audioInputEnabled: settings.audioInputEnabled,
+    mouthThreshold: settings.mouthThreshold,
+    mouthCrop: settings.mouthCrop,
+    mouthImages: settings.mouthImages,
   };
 }
 
@@ -317,6 +373,19 @@ async function loadNormalBlinkImage(): Promise<string | undefined> {
   }
 }
 
+async function loadMouthImages(): Promise<MouthImages> {
+  if (!("indexedDB" in window)) return {};
+  const db = await openImageDb();
+  try {
+    const entries = await Promise.all(
+      mouthImageSlots.map(async ({ key }) => [key, await readImageFromDb(db, MOUTH_IMAGE_KEYS[key])] as const),
+    );
+    return Object.fromEntries(entries.filter(([, value]) => Boolean(value))) as MouthImages;
+  } finally {
+    db.close();
+  }
+}
+
 function readImageFromDb(db: IDBDatabase, key: ImageDbKey): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const request = db.transaction(IMAGE_STORE_NAME, "readonly").objectStore(IMAGE_STORE_NAME).get(key);
@@ -363,6 +432,14 @@ async function deleteNormalBlinkImage() {
   return deleteImageFromDb(NORMAL_BLINK_IMAGE_KEY);
 }
 
+async function saveMouthImage(key: MouthImageSlot, dataUrl: string) {
+  return saveImageToDb(MOUTH_IMAGE_KEYS[key], dataUrl);
+}
+
+async function deleteMouthImage(key: MouthImageSlot) {
+  return deleteImageFromDb(MOUTH_IMAGE_KEYS[key]);
+}
+
 async function deleteImageFromDb(key: ImageDbKey) {
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
@@ -391,11 +468,21 @@ async function clearReactionImages() {
   }
 }
 
-async function publishSharedState(reaction: Reaction, settings: Settings) {
+async function publishSharedState(reaction: Reaction, mouthShape: MouthShape, audioLevel: number, settings?: Settings) {
+  const body: {
+    reaction: Reaction;
+    mouthShape: MouthShape;
+    audioLevel: number;
+    settings?: SharedAvatarSettings;
+  } = { reaction, mouthShape, audioLevel };
+  if (settings) {
+    body.settings = toSharedAvatarSettings(settings);
+  }
+
   await fetch(SHARED_REACTION_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reaction, settings: toSharedAvatarSettings(settings) }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -406,6 +493,8 @@ async function readSharedReaction(): Promise<SharedReactionPayload | undefined> 
   if (!payload.reaction || !reactions.some((item) => item.key === payload.reaction)) return undefined;
   return {
     reaction: payload.reaction,
+    mouthShape: isMouthShape(payload.mouthShape) ? payload.mouthShape : "closed",
+    audioLevel: typeof payload.audioLevel === "number" ? payload.audioLevel : 0,
     updatedAt: typeof payload.updatedAt === "number" ? payload.updatedAt : 0,
     settings: payload.settings,
   };
@@ -422,9 +511,18 @@ function App() {
     confidence: 0,
     status: "待機中",
   });
+  const [audioDebug, setAudioDebug] = useState<AudioDebug>({
+    volume: 0,
+    mouthShape: "closed",
+    status: "音声入力は停止中",
+  });
+  const [audioError, setAudioError] = useState("");
+  const [mouthShape, setMouthShape] = useState<MouthShape>("closed");
   const [manualBlinkSignal, setManualBlinkSignal] = useState(0);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [cameraError, setCameraError] = useState("");
+  const manualMouthTimeoutRef = useRef<number | undefined>(undefined);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
@@ -441,9 +539,9 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([loadReactionImages(), loadBackgroundImage(), loadNormalBlinkImage()])
-      .then(([images, backgroundImage, normalBlinkImage]) => {
-        if (!cancelled) updateSettings({ images, backgroundImage, normalBlinkImage });
+    void Promise.all([loadReactionImages(), loadBackgroundImage(), loadNormalBlinkImage(), loadMouthImages()])
+      .then(([images, backgroundImage, normalBlinkImage, mouthImages]) => {
+        if (!cancelled) updateSettings({ images, backgroundImage, normalBlinkImage, mouthImages });
       })
       .catch(() => {
         if (!cancelled) setCameraError("保存済み画像の読み込みに失敗しました。");
@@ -458,14 +556,22 @@ function App() {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     void navigator.mediaDevices
       .enumerateDevices()
-      .then((deviceList) => setDevices(deviceList.filter((device) => device.kind === "videoinput")))
+      .then((deviceList) => {
+        setDevices(deviceList.filter((device) => device.kind === "videoinput"));
+        setAudioDevices(deviceList.filter((device) => device.kind === "audioinput"));
+      })
       .catch(() => undefined);
   }, []);
 
   useEffect(() => {
     if (route === "avatar") return;
-    void publishSharedState(reaction, settings).catch(() => undefined);
+    void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume, settings).catch(() => undefined);
   }, [reaction, route, settings]);
+
+  useEffect(() => {
+    if (route === "avatar") return;
+    void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume).catch(() => undefined);
+  }, [mouthShape, reaction, route]);
 
   useEffect(() => {
     if (route !== "avatar") return;
@@ -477,6 +583,13 @@ function App() {
       if (!cancelled && payload && payload.updatedAt !== lastUpdatedAt) {
         lastUpdatedAt = payload.updatedAt;
         setReaction(payload.reaction);
+        setMouthShape(payload.reaction === "normal" && payload.mouthShape ? payload.mouthShape : "closed");
+        setAudioDebug((current) => ({
+          ...current,
+          volume: payload.audioLevel ?? current.volume,
+          mouthShape: payload.mouthShape ?? "closed",
+          status: "入力側から同期中",
+        }));
         if (payload.settings) updateSettings(payload.settings);
       }
     };
@@ -534,18 +647,51 @@ function App() {
     onError: setCameraError,
   });
 
+  useLipSyncAudio({
+    enabled: route !== "avatar" && settings.lifeEnabled && settings.lipSyncEnabled && settings.audioInputEnabled,
+    deviceId: settings.selectedAudioDeviceId,
+    threshold: settings.mouthThreshold,
+    onDebug: setAudioDebug,
+    onError: setAudioError,
+    onMouthShape: setMouthShape,
+  });
+
+  const handleManualMouth = useCallback((nextMouthShape: MouthShape) => {
+    window.clearTimeout(manualMouthTimeoutRef.current);
+    setMouthShape(nextMouthShape);
+    setAudioDebug((current) => ({
+      ...current,
+      mouthShape: nextMouthShape,
+      status: "デバッグ表示中",
+    }));
+    manualMouthTimeoutRef.current = window.setTimeout(() => {
+      setMouthShape("closed");
+      setAudioDebug((current) => ({ ...current, mouthShape: "closed" }));
+    }, 420);
+  }, []);
+
   return (
     <main className={`app ${route}`}>
-      <AvatarStage manualBlinkSignal={manualBlinkSignal} reaction={reaction} route={route} settings={settings} />
+      <AvatarStage
+        manualBlinkSignal={manualBlinkSignal}
+        mouthShape={mouthShape}
+        reaction={reaction}
+        route={route}
+        settings={settings}
+      />
       <video ref={videoRef} className="trackingVideo" muted playsInline />
 
       {route === "settings" && (
         <SettingsPanel
+          audioDebug={audioDebug}
+          audioDevices={audioDevices}
+          audioError={audioError}
           cameraError={cameraError}
           debug={debug}
           devices={devices}
           onChange={updateSettings}
           onManualBlink={() => setManualBlinkSignal((value) => value + 1)}
+          onManualMouth={handleManualMouth}
           onManualReaction={setReaction}
           reaction={reaction}
           settings={settings}
@@ -711,6 +857,148 @@ function stopCamera(
   cancelAnimationFrame(animationRef.current);
   streamRef.current?.getTracks().forEach((track) => track.stop());
   streamRef.current = null;
+}
+
+type LipSyncAudioArgs = {
+  enabled: boolean;
+  deviceId: string;
+  threshold: number;
+  onMouthShape: (mouthShape: MouthShape) => void;
+  onDebug: (debug: AudioDebug) => void;
+  onError: (message: string) => void;
+};
+
+function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, onError }: LipSyncAudioArgs) {
+  const animationRef = useRef(0);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const smoothedLevelRef = useRef(0);
+  const mouthShapeRef = useRef<MouthShape>("closed");
+  const lastSwitchRef = useRef(0);
+  const lastVoiceRef = useRef(0);
+  const lastDebugRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function start() {
+      stopAudio(streamRef, animationRef, audioContextRef);
+      onError("");
+      smoothedLevelRef.current = 0;
+      mouthShapeRef.current = "closed";
+      onMouthShape("closed");
+
+      if (!enabled) {
+        onDebug({ volume: 0, mouthShape: "closed", status: "音声入力は停止中" });
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId ? { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true } : true,
+          video: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        const AudioContextClass =
+          window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const audioContext = new AudioContextClass();
+        if (audioContext.state === "suspended") {
+          await audioContext.resume().catch(() => undefined);
+        }
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.62;
+        audioContext.createMediaStreamSource(stream).connect(analyser);
+
+        streamRef.current = stream;
+        audioContextRef.current = audioContext;
+        analyserRef.current = analyser;
+        lastSwitchRef.current = performance.now();
+        lastVoiceRef.current = 0;
+
+        const data = new Uint8Array(analyser.fftSize);
+        const tick = () => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let index = 0; index < data.length; index += 1) {
+            const centered = (data[index] - 128) / 128;
+            sum += centered * centered;
+          }
+
+          const rms = Math.sqrt(sum / data.length);
+          const rawLevel = clamp(rms * 520, 0, 100);
+          const smoothedLevel = smoothedLevelRef.current * 0.68 + rawLevel * 0.32;
+          smoothedLevelRef.current = smoothedLevel;
+
+          const now = performance.now();
+          const quietThreshold = threshold * 0.62;
+          const smallThreshold = threshold;
+          const wideThreshold = threshold * 1.85;
+          if (smoothedLevel >= smallThreshold) {
+            lastVoiceRef.current = now;
+          }
+
+          let nextShape: MouthShape = mouthShapeRef.current;
+          if (smoothedLevel >= wideThreshold) {
+            nextShape = "wideOpen";
+          } else if (smoothedLevel >= smallThreshold || now - lastVoiceRef.current < 150) {
+            nextShape = "smallOpen";
+          } else if (smoothedLevel < quietThreshold) {
+            nextShape = "closed";
+          }
+
+          const minHoldMs = nextShape === "closed" ? 115 : 85;
+          const shapeChanged = nextShape !== mouthShapeRef.current && now - lastSwitchRef.current >= minHoldMs;
+          if (shapeChanged) {
+            mouthShapeRef.current = nextShape;
+            lastSwitchRef.current = now;
+            onMouthShape(nextShape);
+          }
+
+          if (shapeChanged || now - lastDebugRef.current > 120) {
+            lastDebugRef.current = now;
+            onDebug({
+              volume: smoothedLevel,
+              mouthShape: mouthShapeRef.current,
+              status: audioContext.state === "running" ? "音声入力中" : `音声入力 ${audioContext.state}`,
+            });
+          }
+          animationRef.current = requestAnimationFrame(tick);
+        };
+
+        tick();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "音声入力を開始できませんでした。";
+        onError(message);
+        onDebug({ volume: 0, mouthShape: "closed", status: "音声入力エラー" });
+        onMouthShape("closed");
+      }
+    }
+
+    void start();
+
+    return () => {
+      cancelled = true;
+      stopAudio(streamRef, animationRef, audioContextRef);
+    };
+  }, [deviceId, enabled, onDebug, onError, onMouthShape, threshold]);
+}
+
+function stopAudio(
+  streamRef: React.MutableRefObject<MediaStream | null>,
+  animationRef: React.MutableRefObject<number>,
+  audioContextRef: React.MutableRefObject<AudioContext | null>,
+) {
+  cancelAnimationFrame(animationRef.current);
+  streamRef.current?.getTracks().forEach((track) => track.stop());
+  streamRef.current = null;
+  void audioContextRef.current?.close().catch(() => undefined);
+  audioContextRef.current = null;
 }
 
 function classifyPose(
@@ -922,12 +1210,20 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function clampBlinkCrop(crop: BlinkCrop): BlinkCrop {
+function clampCropRect(crop: CropRect): CropRect {
   const x = clamp(Math.round(crop.x), 0, 98);
   const y = clamp(Math.round(crop.y), 0, 98);
   const width = clamp(Math.round(crop.width), 1, 100 - x);
   const height = clamp(Math.round(crop.height), 1, 100 - y);
   return { x, y, width, height };
+}
+
+function clampBlinkCrop(crop: BlinkCrop): BlinkCrop {
+  return clampCropRect(crop);
+}
+
+function clampMouthCrop(crop: MouthCrop): MouthCrop {
+  return clampCropRect(crop);
 }
 
 function useNormalBlink(reaction: Reaction, settings: Settings, manualBlinkSignal: number) {
@@ -999,7 +1295,15 @@ function isValidBlinkCrop(crop: BlinkCrop) {
   return crop.width > 0 && crop.height > 0 && crop.x >= 0 && crop.y >= 0 && crop.x + crop.width <= 100 && crop.y + crop.height <= 100;
 }
 
-function getBlinkClipPath(crop: BlinkCrop) {
+function isValidCropRect(crop: CropRect) {
+  return crop.width > 0 && crop.height > 0 && crop.x >= 0 && crop.y >= 0 && crop.x + crop.width <= 100 && crop.y + crop.height <= 100;
+}
+
+function isValidMouthCrop(crop: MouthCrop) {
+  return isValidCropRect(crop);
+}
+
+function getCropClipPath(crop: CropRect) {
   const top = crop.y;
   const right = 100 - crop.x - crop.width;
   const bottom = 100 - crop.y - crop.height;
@@ -1007,13 +1311,39 @@ function getBlinkClipPath(crop: BlinkCrop) {
   return `inset(${top}% ${right}% ${bottom}% ${left}%)`;
 }
 
+function getBlinkClipPath(crop: BlinkCrop) {
+  return getCropClipPath(crop);
+}
+
+function getMouthClipPath(crop: MouthCrop) {
+  return getCropClipPath(crop);
+}
+
+function getMouthOverlaySrc(mouthShape: MouthShape, mouthImages: MouthImages) {
+  if (mouthShape === "closed") return undefined;
+  if (mouthShape === "wideOpen") return mouthImages.wideOpen ?? mouthImages.smallOpen;
+  return mouthImages.smallOpen ?? mouthImages.wideOpen;
+}
+
+function getMouthShapeLabel(mouthShape: MouthShape) {
+  if (mouthShape === "smallOpen") return "小開き";
+  if (mouthShape === "wideOpen") return "大開き";
+  return "通常口";
+}
+
+function isMouthShape(value: unknown): value is MouthShape {
+  return value === "closed" || value === "smallOpen" || value === "wideOpen";
+}
+
 function AvatarStage({
   manualBlinkSignal,
+  mouthShape,
   reaction,
   route,
   settings,
 }: {
   manualBlinkSignal: number;
+  mouthShape: MouthShape;
   reaction: Reaction;
   route: AppRoute;
   settings: Settings;
@@ -1022,6 +1352,15 @@ function AvatarStage({
   const image = settings.images[reaction];
   const showBlinkOverlay = reaction === "normal" && isBlinking && Boolean(settings.normalBlinkImage) && isValidBlinkCrop(settings.blinkCrop);
   const showBlinkGuide = route === "settings" && reaction === "normal" && settings.blinkEnabled && Boolean(settings.normalBlinkImage);
+  const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, settings.mouthImages) : undefined;
+  const showMouthOverlay =
+    reaction === "normal" &&
+    settings.lifeEnabled &&
+    settings.lipSyncEnabled &&
+    mouthShape !== "closed" &&
+    Boolean(mouthOverlaySrc) &&
+    isValidMouthCrop(settings.mouthCrop);
+  const showMouthGuide = route === "settings" && reaction === "normal" && settings.lipSyncEnabled;
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
   const useAvatarLayout = route !== "settings";
   const size = useAvatarLayout ? settings.avatarSize : settings.size;
@@ -1059,11 +1398,15 @@ function AvatarStage({
               alt={label}
               blinkCrop={settings.blinkCrop}
               blinkOverlaySrc={reaction === "normal" ? settings.normalBlinkImage : undefined}
+              mouthCrop={settings.mouthCrop}
+              mouthOverlaySrc={mouthOverlaySrc}
               outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
               primarySrc={image}
               reaction={reaction}
               showBlinkGuide={showBlinkGuide}
               showBlinkOverlay={showBlinkOverlay}
+              showMouthGuide={showMouthGuide}
+              showMouthOverlay={showMouthOverlay}
               staticSrc={staticImage}
             />
           </div>
@@ -1077,26 +1420,35 @@ function AvatarImage({
   alt,
   blinkCrop,
   blinkOverlaySrc,
+  mouthCrop,
+  mouthOverlaySrc,
   outlineWidth,
   primarySrc,
   reaction,
   showBlinkGuide,
   showBlinkOverlay,
+  showMouthGuide,
+  showMouthOverlay,
   staticSrc,
 }: {
   alt: string;
   blinkCrop: BlinkCrop;
   blinkOverlaySrc: string | undefined;
+  mouthCrop: MouthCrop;
+  mouthOverlaySrc: string | undefined;
   outlineWidth: string;
   primarySrc: string | undefined;
   reaction: Reaction;
   showBlinkGuide: boolean;
   showBlinkOverlay: boolean;
+  showMouthGuide: boolean;
+  showMouthOverlay: boolean;
   staticSrc: string;
 }) {
   const [failedSrc, setFailedSrc] = useState("");
   const src = primarySrc ?? staticSrc;
   const blinkClipPath = getBlinkClipPath(blinkCrop);
+  const mouthClipPath = getMouthClipPath(mouthCrop);
 
   useEffect(() => {
     setFailedSrc("");
@@ -1133,6 +1485,16 @@ function AvatarImage({
           style={{ clipPath: blinkClipPath }}
         />
       )}
+      {mouthOverlaySrc && (
+        <img
+          className={`mouthOverlayImage${showMouthOverlay ? " visible" : ""}`}
+          src={mouthOverlaySrc}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{ clipPath: mouthClipPath }}
+        />
+      )}
       {showBlinkGuide && (
         <span
           className="blinkCropGuide"
@@ -1142,6 +1504,18 @@ function AvatarImage({
             top: `${blinkCrop.y}%`,
             width: `${blinkCrop.width}%`,
             height: `${blinkCrop.height}%`,
+          }}
+        />
+      )}
+      {showMouthGuide && (
+        <span
+          className="mouthCropGuide"
+          aria-hidden="true"
+          style={{
+            left: `${mouthCrop.x}%`,
+            top: `${mouthCrop.y}%`,
+            width: `${mouthCrop.width}%`,
+            height: `${mouthCrop.height}%`,
           }}
         />
       )}
@@ -1190,10 +1564,14 @@ type SettingsPanelProps = {
   settings: Settings;
   reaction: Reaction;
   debug: TrackingDebug;
+  audioDebug: AudioDebug;
   devices: MediaDeviceInfo[];
+  audioDevices: MediaDeviceInfo[];
   cameraError: string;
+  audioError: string;
   onChange: (patch: Partial<Settings>) => void;
   onManualBlink: () => void;
+  onManualMouth: (mouthShape: MouthShape) => void;
   onManualReaction: (reaction: Reaction) => void;
 };
 
@@ -1201,15 +1579,22 @@ function SettingsPanel({
   settings,
   reaction,
   debug,
+  audioDebug,
   devices,
+  audioDevices,
   cameraError,
+  audioError,
   onChange,
   onManualBlink,
+  onManualMouth,
   onManualReaction,
 }: SettingsPanelProps) {
   const [imageMessage, setImageMessage] = useState("");
   const updateBlinkCrop = (patch: Partial<BlinkCrop>) => {
     onChange({ blinkCrop: clampBlinkCrop({ ...settings.blinkCrop, ...patch }) });
+  };
+  const updateMouthCrop = (patch: Partial<MouthCrop>) => {
+    onChange({ mouthCrop: clampMouthCrop({ ...settings.mouthCrop, ...patch }) });
   };
 
   const handleImageUpload = (slot: ImageSlot, file: File | undefined) => {
@@ -1242,6 +1627,7 @@ function SettingsPanel({
           backgroundImage: undefined,
           backgroundMode: settings.backgroundMode === "image" ? "green" : settings.backgroundMode,
           normalBlinkImage: undefined,
+          mouthImages: {},
         });
         setImageMessage("登録画像をクリアしました。");
       })
@@ -1334,6 +1720,45 @@ function SettingsPanel({
         setImageMessage("通常まばたき画像の削除に失敗しました。");
         console.error(error);
         console.error("Normal blink image could not be deleted.");
+      });
+  };
+
+  const handleMouthUpload = (slot: MouthImageSlot, file: File | undefined) => {
+    if (!file) return;
+    setImageMessage(`${file.name} を${mouthImageSlots.find((item) => item.key === slot)?.label ?? "口パク画像"}として読み込み中...`);
+    void readFileAsDataUrl(file)
+      .then((dataUrl) => {
+        onChange({
+          mouthImages: {
+            ...settings.mouthImages,
+            [slot]: dataUrl,
+          },
+          lifeEnabled: true,
+          lipSyncEnabled: true,
+        });
+        return saveMouthImage(slot, dataUrl).then(() => {
+          setImageMessage(`${file.name} を口パク画像として登録しました。`);
+        });
+      })
+      .catch((error) => {
+        setImageMessage("口パク画像の登録に失敗しました。容量が大きすぎる可能性があります。");
+        console.error(error);
+        console.error(`${slot} mouth image could not be saved.`);
+      });
+  };
+
+  const handleDeleteMouth = (slot: MouthImageSlot) => {
+    void deleteMouthImage(slot)
+      .then(() => {
+        const nextMouthImages = { ...settings.mouthImages };
+        delete nextMouthImages[slot];
+        onChange({ mouthImages: nextMouthImages });
+        setImageMessage(`${mouthImageSlots.find((item) => item.key === slot)?.label ?? "口パク画像"}を削除しました。`);
+      })
+      .catch((error) => {
+        setImageMessage("口パク画像の削除に失敗しました。");
+        console.error(error);
+        console.error(`${slot} mouth image could not be deleted.`);
       });
   };
 
@@ -1554,6 +1979,125 @@ function SettingsPanel({
       </section>
 
       <section className="section">
+        <h2>口パク</h2>
+        <label className="switchRow">
+          <span>口パク</span>
+          <input
+            type="checkbox"
+            checked={settings.lipSyncEnabled}
+            onChange={(event) => onChange({ lipSyncEnabled: event.target.checked })}
+          />
+        </label>
+        <label className="switchRow">
+          <span>マイク音声で動かす</span>
+          <input
+            type="checkbox"
+            checked={settings.audioInputEnabled}
+            onChange={(event) => onChange({ audioInputEnabled: event.target.checked })}
+          />
+        </label>
+        <label>
+          マイク
+          <select
+            value={settings.selectedAudioDeviceId}
+            onChange={(event) => onChange({ selectedAudioDeviceId: event.target.value })}
+          >
+            <option value="">既定のマイク</option>
+            {audioDevices.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `マイク ${device.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Range
+          label="音量しきい値"
+          min={1}
+          max={100}
+          step={1}
+          value={settings.mouthThreshold}
+          onChange={(mouthThreshold) => onChange({ mouthThreshold })}
+        />
+        <div className="statusGrid">
+          <Status label="音量" value={audioDebug.volume.toFixed(1)} />
+          <Status label="口形" value={getMouthShapeLabel(audioDebug.mouthShape)} />
+        </div>
+        <p className="hint">{audioDebug.status}</p>
+        {audioError && <p className="error">{audioError}</p>}
+        <div className="imageGrid">
+          {mouthImageSlots.map((item) => (
+            <div key={item.key} className="fileSlot">
+              <span>
+                {item.label}
+                <small>{item.file}</small>
+                <small className={settings.mouthImages[item.key] ? "savedBadge" : "emptyBadge"}>
+                  {settings.mouthImages[item.key] ? "登録済み" : "未登録"}
+                </small>
+              </span>
+              <div className="fileActions">
+                <label className="filePicker">
+                  画像を選択
+                  <input
+                    type="file"
+                    accept="image/png,image/*"
+                    onClick={(event) => {
+                      event.currentTarget.value = "";
+                    }}
+                    onChange={(event) => {
+                      handleMouthUpload(item.key, event.target.files?.[0]);
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="deleteImageButton"
+                  disabled={!settings.mouthImages[item.key]}
+                  onClick={() => handleDeleteMouth(item.key)}
+                >
+                  削除
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rangeGroup">
+          <p className="hint">オレンジ枠を通常画像の口元に合わせてください。通常口は normal.png をそのまま使います。</p>
+          <Range
+            label="口元 X"
+            min={0}
+            max={98}
+            step={1}
+            value={settings.mouthCrop.x}
+            onChange={(x) => updateMouthCrop({ x })}
+          />
+          <Range
+            label="口元 Y"
+            min={0}
+            max={98}
+            step={1}
+            value={settings.mouthCrop.y}
+            onChange={(y) => updateMouthCrop({ y })}
+          />
+          <Range
+            label="口元 幅"
+            min={1}
+            max={100}
+            step={1}
+            value={settings.mouthCrop.width}
+            onChange={(width) => updateMouthCrop({ width })}
+          />
+          <Range
+            label="口元 高さ"
+            min={1}
+            max={100}
+            step={1}
+            value={settings.mouthCrop.height}
+            onChange={(height) => updateMouthCrop({ height })}
+          />
+        </div>
+      </section>
+
+      <section className="section">
         <h2>表示</h2>
         <p className="hint">設定画面プレビュー</p>
         <Range label="サイズ" min={180} max={1300} step={10} value={settings.size} onChange={(size) => onChange({ size })} />
@@ -1683,6 +2227,20 @@ function SettingsPanel({
             onClick={onManualBlink}
           >
             目閉じ
+          </button>
+          <button
+            type="button"
+            disabled={reaction !== "normal" || !settings.lipSyncEnabled || !getMouthOverlaySrc("smallOpen", settings.mouthImages)}
+            onClick={() => onManualMouth("smallOpen")}
+          >
+            小開き口
+          </button>
+          <button
+            type="button"
+            disabled={reaction !== "normal" || !settings.lipSyncEnabled || !getMouthOverlaySrc("wideOpen", settings.mouthImages)}
+            onClick={() => onManualMouth("wideOpen")}
+          >
+            大開き口
           </button>
         </div>
       </section>

@@ -235,10 +235,10 @@ button:disabled:hover {
   animation: imageSettle 520ms ease-out both;
 }
 
-.blinkOverlayImage {
+.blinkOverlayImage,
+.mouthOverlayImage {
   position: absolute;
   inset: 0;
-  z-index: 3;
   display: block;
   width: 100%;
   height: 100%;
@@ -247,13 +247,23 @@ button:disabled:hover {
   pointer-events: none;
 }
 
-.blinkOverlayImage.visible {
+.blinkOverlayImage {
+  z-index: 3;
+}
+
+.mouthOverlayImage {
+  z-index: 4;
+}
+
+.blinkOverlayImage.visible,
+.mouthOverlayImage.visible {
   opacity: 1;
 }
 
-.blinkCropGuide {
+.blinkCropGuide,
+.mouthCropGuide {
   position: absolute;
-  z-index: 4;
+  z-index: 5;
   border: 2px solid rgba(255, 244, 153, 0.95);
   border-radius: 4px;
   box-shadow:
@@ -261,6 +271,15 @@ button:disabled:hover {
     0 0 18px rgba(255, 225, 88, 0.28);
   background: rgba(255, 235, 96, 0.08);
   pointer-events: none;
+}
+
+.mouthCropGuide {
+  z-index: 6;
+  border-color: rgba(255, 160, 74, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(64, 28, 0, 0.55),
+    0 0 18px rgba(255, 126, 44, 0.3);
+  background: rgba(255, 120, 42, 0.12);
 }
 
 .life-on.motion-on.reaction-normal .avatar {

@@ -2,7 +2,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const reactions = new Set(["normal", "joy", "surprised", "troubled", "explain"]);
+const mouthShapes = new Set(["closed", "smallOpen", "wideOpen"]);
 let sharedReaction = "normal";
+let sharedMouthShape = "closed";
+let sharedAudioLevel = 0;
 let updatedAt = Date.now();
 let sharedSettings = {
   avatarSize: 620,
@@ -25,6 +28,16 @@ let sharedSettings = {
     width: 28,
     height: 12,
   },
+  lipSyncEnabled: false,
+  audioInputEnabled: false,
+  mouthThreshold: 28,
+  mouthCrop: {
+    x: 43,
+    y: 35,
+    width: 15,
+    height: 9,
+  },
+  mouthImages: {} as Partial<Record<"smallOpen" | "wideOpen", string>>,
 };
 const clients = new Set<{
   write: (chunk: string) => void;
@@ -32,7 +45,13 @@ const clients = new Set<{
 }>();
 
 function reactionPayload() {
-  return JSON.stringify({ reaction: sharedReaction, updatedAt, settings: sharedSettings });
+  return JSON.stringify({
+    reaction: sharedReaction,
+    mouthShape: sharedMouthShape,
+    audioLevel: sharedAudioLevel,
+    updatedAt,
+    settings: sharedSettings,
+  });
 }
 
 function broadcastReaction() {
@@ -91,13 +110,20 @@ export default defineConfig({
           });
           req.on("end", () => {
             try {
-              const parsed = JSON.parse(body) as { reaction?: string; settings?: Partial<typeof sharedSettings> };
+              const parsed = JSON.parse(body) as {
+                reaction?: string;
+                mouthShape?: string;
+                audioLevel?: number;
+                settings?: Partial<typeof sharedSettings>;
+              };
               if (!parsed.reaction || !reactions.has(parsed.reaction)) {
                 res.statusCode = 400;
                 res.end(JSON.stringify({ error: "Invalid reaction" }));
                 return;
               }
               sharedReaction = parsed.reaction;
+              sharedMouthShape = parsed.mouthShape && mouthShapes.has(parsed.mouthShape) ? parsed.mouthShape : "closed";
+              sharedAudioLevel = typeof parsed.audioLevel === "number" ? parsed.audioLevel : 0;
               if (parsed.settings) {
                 sharedSettings = {
                   ...sharedSettings,
