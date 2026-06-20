@@ -16,8 +16,10 @@ type BackgroundMode = "transparent" | "green" | "color" | "image";
 type Sensitivity = "low" | "standard" | "high";
 type AppRoute = "settings" | "avatar" | "capture";
 type CanvasAspectRatio = "9:16" | "16:9";
+type LifeIntensity = "subtle" | "standard" | "strong";
 
 type ReactionImages = Record<ImageSlot, string>;
+type ImageDbKey = ImageSlot | typeof BACKGROUND_IMAGE_KEY | typeof NORMAL_BLINK_IMAGE_KEY;
 
 type Settings = {
   selectedDeviceId: string;
@@ -35,10 +37,15 @@ type Settings = {
   backgroundMode: BackgroundMode;
   backgroundColor: string;
   backgroundImage?: string;
+  lifeEnabled: boolean;
+  blinkEnabled: boolean;
+  motionEnabled: boolean;
+  lifeIntensity: LifeIntensity;
+  normalBlinkImage?: string;
   images: Partial<ReactionImages>;
 };
 
-type StoredSettings = Omit<Settings, "images" | "backgroundImage">;
+type StoredSettings = Omit<Settings, "images" | "backgroundImage" | "normalBlinkImage">;
 
 type TrackingDebug = {
   candidate: Reaction;
@@ -70,6 +77,11 @@ type SharedAvatarSettings = Pick<
   | "backgroundMode"
   | "backgroundColor"
   | "backgroundImage"
+  | "lifeEnabled"
+  | "blinkEnabled"
+  | "motionEnabled"
+  | "lifeIntensity"
+  | "normalBlinkImage"
 >;
 
 type AppErrorBoundaryState = {
@@ -80,6 +92,7 @@ const STORAGE_KEY = "reaction-standee:v1";
 const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
 const BACKGROUND_IMAGE_KEY = "__background__";
+const NORMAL_BLINK_IMAGE_KEY = "__normal_blink__";
 const SHARED_REACTION_URL = "/api/reaction";
 const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -167,6 +180,11 @@ const defaultSettings: Settings = {
   backgroundMode: "transparent",
   backgroundColor: "#111827",
   backgroundImage: undefined,
+  lifeEnabled: true,
+  blinkEnabled: true,
+  motionEnabled: true,
+  lifeIntensity: "standard",
+  normalBlinkImage: undefined,
   images: {},
 };
 
@@ -179,6 +197,7 @@ function readSettings(): Settings {
       ...defaultSettings,
       ...parsed,
       backgroundImage: undefined,
+      normalBlinkImage: undefined,
       images: {},
     };
   } catch {
@@ -202,6 +221,10 @@ function toStoredSettings(settings: Settings): StoredSettings {
     canvasAspectRatio: settings.canvasAspectRatio,
     backgroundMode: settings.backgroundMode,
     backgroundColor: settings.backgroundColor,
+    lifeEnabled: settings.lifeEnabled,
+    blinkEnabled: settings.blinkEnabled,
+    motionEnabled: settings.motionEnabled,
+    lifeIntensity: settings.lifeIntensity,
   };
 }
 
@@ -216,6 +239,11 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     backgroundMode: settings.backgroundMode,
     backgroundColor: settings.backgroundColor,
     backgroundImage: settings.backgroundImage,
+    lifeEnabled: settings.lifeEnabled,
+    blinkEnabled: settings.blinkEnabled,
+    motionEnabled: settings.motionEnabled,
+    lifeIntensity: settings.lifeIntensity,
+    normalBlinkImage: settings.normalBlinkImage,
   };
 }
 
@@ -262,7 +290,17 @@ async function loadBackgroundImage(): Promise<string | undefined> {
   }
 }
 
-function readImageFromDb(db: IDBDatabase, key: ImageSlot | typeof BACKGROUND_IMAGE_KEY): Promise<string | undefined> {
+async function loadNormalBlinkImage(): Promise<string | undefined> {
+  if (!("indexedDB" in window)) return undefined;
+  const db = await openImageDb();
+  try {
+    return readImageFromDb(db, NORMAL_BLINK_IMAGE_KEY);
+  } finally {
+    db.close();
+  }
+}
+
+function readImageFromDb(db: IDBDatabase, key: ImageDbKey): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const request = db.transaction(IMAGE_STORE_NAME, "readonly").objectStore(IMAGE_STORE_NAME).get(key);
     request.onsuccess = () => resolve(typeof request.result === "string" ? request.result : undefined);
@@ -270,7 +308,7 @@ function readImageFromDb(db: IDBDatabase, key: ImageSlot | typeof BACKGROUND_IMA
   });
 }
 
-async function saveImageToDb(key: ImageSlot | typeof BACKGROUND_IMAGE_KEY, dataUrl: string) {
+async function saveImageToDb(key: ImageDbKey, dataUrl: string) {
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -300,7 +338,15 @@ async function deleteBackgroundImage() {
   return deleteImageFromDb(BACKGROUND_IMAGE_KEY);
 }
 
-async function deleteImageFromDb(key: ImageSlot | typeof BACKGROUND_IMAGE_KEY) {
+async function saveNormalBlinkImage(dataUrl: string) {
+  return saveImageToDb(NORMAL_BLINK_IMAGE_KEY, dataUrl);
+}
+
+async function deleteNormalBlinkImage() {
+  return deleteImageFromDb(NORMAL_BLINK_IMAGE_KEY);
+}
+
+async function deleteImageFromDb(key: ImageDbKey) {
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -377,9 +423,9 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([loadReactionImages(), loadBackgroundImage()])
-      .then(([images, backgroundImage]) => {
-        if (!cancelled) updateSettings({ images, backgroundImage });
+    void Promise.all([loadReactionImages(), loadBackgroundImage(), loadNormalBlinkImage()])
+      .then(([images, backgroundImage, normalBlinkImage]) => {
+        if (!cancelled) updateSettings({ images, backgroundImage, normalBlinkImage });
       })
       .catch(() => {
         if (!cancelled) setCameraError("保存済み画像の読み込みに失敗しました。");
@@ -849,8 +895,66 @@ function getFrameBackground(settings: Settings) {
   return settings.backgroundColor;
 }
 
+function randomBetween(min: number, max: number) {
+  return Math.round(min + Math.random() * (max - min));
+}
+
+function useNormalBlink(reaction: Reaction, settings: Settings) {
+  const [isBlinking, setIsBlinking] = useState(false);
+
+  useEffect(() => {
+    if (reaction !== "normal" || !settings.lifeEnabled || !settings.blinkEnabled || !settings.normalBlinkImage) {
+      setIsBlinking(false);
+      return;
+    }
+
+    let timeout = 0;
+    let cancelled = false;
+
+    const schedule = () => {
+      timeout = window.setTimeout(() => {
+        if (cancelled) return;
+        const blinkDuration = randomBetween(110, 170);
+        const shouldDoubleBlink = Math.random() < 0.16;
+        setIsBlinking(true);
+
+        timeout = window.setTimeout(() => {
+          if (cancelled) return;
+          setIsBlinking(false);
+
+          if (shouldDoubleBlink) {
+            timeout = window.setTimeout(() => {
+              if (cancelled) return;
+              setIsBlinking(true);
+              timeout = window.setTimeout(() => {
+                if (cancelled) return;
+                setIsBlinking(false);
+                schedule();
+              }, randomBetween(90, 130));
+            }, randomBetween(120, 220));
+            return;
+          }
+
+          schedule();
+        }, blinkDuration);
+      }, randomBetween(3000, 7000));
+    };
+
+    schedule();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [reaction, settings.blinkEnabled, settings.lifeEnabled, settings.normalBlinkImage]);
+
+  return isBlinking;
+}
+
 function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route: AppRoute; settings: Settings }) {
-  const image = settings.images[reaction];
+  const isBlinking = useNormalBlink(reaction, settings);
+  const normalImage = isBlinking && settings.normalBlinkImage ? settings.normalBlinkImage : settings.images.normal;
+  const image = reaction === "normal" ? normalImage : settings.images[reaction];
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
   const useAvatarLayout = route !== "settings";
   const size = useAvatarLayout ? settings.avatarSize : settings.size;
@@ -861,7 +965,12 @@ function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route:
   const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
 
   return (
-    <section className={`stage reaction-${reaction}`} aria-label="avatar">
+    <section
+      className={`stage reaction-${reaction} life-${settings.lifeIntensity}${settings.lifeEnabled ? " life-on" : ""}${
+        settings.motionEnabled ? " motion-on" : ""
+      }`}
+      aria-label="avatar"
+    >
       <div
         className="recordingFrame"
         style={{
@@ -1019,7 +1128,12 @@ function SettingsPanel({
   const handleClearImages = () => {
     void clearReactionImages()
       .then(() => {
-        onChange({ images: {} });
+        onChange({
+          images: {},
+          backgroundImage: undefined,
+          backgroundMode: settings.backgroundMode === "image" ? "green" : settings.backgroundMode,
+          normalBlinkImage: undefined,
+        });
         setImageMessage("登録画像をクリアしました。");
       })
       .catch((error) => {
@@ -1077,6 +1191,40 @@ function SettingsPanel({
         setImageMessage("背景画像の削除に失敗しました。");
         console.error(error);
         console.error("Background image could not be deleted.");
+      });
+  };
+
+  const handleNormalBlinkUpload = (file: File | undefined) => {
+    if (!file) return;
+    setImageMessage(`${file.name} を通常まばたき画像として読み込み中...`);
+    void readFileAsDataUrl(file)
+      .then((dataUrl) => {
+        onChange({
+          normalBlinkImage: dataUrl,
+          lifeEnabled: true,
+          blinkEnabled: true,
+        });
+        return saveNormalBlinkImage(dataUrl).then(() => {
+          setImageMessage(`${file.name} を通常まばたき画像として登録しました。`);
+        });
+      })
+      .catch((error) => {
+        setImageMessage("通常まばたき画像の登録に失敗しました。容量が大きすぎる可能性があります。");
+        console.error(error);
+        console.error("Normal blink image could not be saved.");
+      });
+  };
+
+  const handleDeleteNormalBlink = () => {
+    void deleteNormalBlinkImage()
+      .then(() => {
+        onChange({ normalBlinkImage: undefined });
+        setImageMessage("通常まばたき画像を削除しました。");
+      })
+      .catch((error) => {
+        setImageMessage("通常まばたき画像の削除に失敗しました。");
+        console.error(error);
+        console.error("Normal blink image could not be deleted.");
       });
   };
 
@@ -1187,6 +1335,78 @@ function SettingsPanel({
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="section">
+        <h2>生命感</h2>
+        <label className="switchRow">
+          <span>生命感エフェクト</span>
+          <input
+            type="checkbox"
+            checked={settings.lifeEnabled}
+            onChange={(event) => onChange({ lifeEnabled: event.target.checked })}
+          />
+        </label>
+        <label className="switchRow">
+          <span>まばたき</span>
+          <input
+            type="checkbox"
+            checked={settings.blinkEnabled}
+            onChange={(event) => onChange({ blinkEnabled: event.target.checked })}
+          />
+        </label>
+        <label className="switchRow">
+          <span>呼吸・ゆらぎ</span>
+          <input
+            type="checkbox"
+            checked={settings.motionEnabled}
+            onChange={(event) => onChange({ motionEnabled: event.target.checked })}
+          />
+        </label>
+        <label>
+          エフェクトの強さ
+          <select
+            value={settings.lifeIntensity}
+            onChange={(event) => onChange({ lifeIntensity: event.target.value as LifeIntensity })}
+          >
+            <option value="subtle">弱</option>
+            <option value="standard">標準</option>
+            <option value="strong">強</option>
+          </select>
+        </label>
+        <div className="fileSlot backgroundFileSlot">
+          <span>
+            通常まばたき
+            <small>normal の目閉じ差分</small>
+            <small className={settings.normalBlinkImage ? "savedBadge" : "emptyBadge"}>
+              {settings.normalBlinkImage ? "登録済み" : "未登録"}
+            </small>
+          </span>
+          <div className="fileActions">
+            <label className="filePicker">
+              画像を選択
+              <input
+                type="file"
+                accept="image/png,image/*"
+                onClick={(event) => {
+                  event.currentTarget.value = "";
+                }}
+                onChange={(event) => {
+                  handleNormalBlinkUpload(event.target.files?.[0]);
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="deleteImageButton"
+              disabled={!settings.normalBlinkImage}
+              onClick={handleDeleteNormalBlink}
+            >
+              削除
+            </button>
+          </div>
+        </div>
+        <p className="hint">まばたきは通常表示中だけ有効です。未登録の場合は自動で何もしません。</p>
       </section>
 
       <section className="section">

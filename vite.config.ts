@@ -14,6 +14,11 @@ let sharedSettings = {
   backgroundMode: "transparent",
   backgroundColor: "#111827",
   backgroundImage: undefined as string | undefined,
+  lifeEnabled: true,
+  blinkEnabled: true,
+  motionEnabled: true,
+  lifeIntensity: "standard",
+  normalBlinkImage: undefined as string | undefined,
 };
 const clients = new Set<{
   write: (chunk: string) => void;
