@@ -873,7 +873,7 @@ function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route:
         <div
           className="avatarSlot"
           style={{
-            width: size,
+            ["--avatar-size" as string]: `${size}px`,
             transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
           }}
         >

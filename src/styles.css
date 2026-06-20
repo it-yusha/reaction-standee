@@ -139,9 +139,11 @@ button:disabled:hover {
 }
 
 .avatarSlot {
+  --avatar-size: 620px;
   position: absolute;
   left: 50%;
   top: 50%;
+  width: var(--avatar-size);
   max-width: 96%;
   max-height: 96%;
   display: flex;
