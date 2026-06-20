@@ -21,6 +21,13 @@ type LifeIntensity = "subtle" | "standard" | "strong";
 type ReactionImages = Record<ImageSlot, string>;
 type ImageDbKey = ImageSlot | typeof BACKGROUND_IMAGE_KEY | typeof NORMAL_BLINK_IMAGE_KEY;
 
+type BlinkCrop = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 type Settings = {
   selectedDeviceId: string;
   trackingEnabled: boolean;
@@ -42,6 +49,7 @@ type Settings = {
   motionEnabled: boolean;
   lifeIntensity: LifeIntensity;
   normalBlinkImage?: string;
+  blinkCrop: BlinkCrop;
   images: Partial<ReactionImages>;
 };
 
@@ -82,6 +90,7 @@ type SharedAvatarSettings = Pick<
   | "motionEnabled"
   | "lifeIntensity"
   | "normalBlinkImage"
+  | "blinkCrop"
 >;
 
 type AppErrorBoundaryState = {
@@ -185,6 +194,12 @@ const defaultSettings: Settings = {
   motionEnabled: true,
   lifeIntensity: "standard",
   normalBlinkImage: undefined,
+  blinkCrop: {
+    x: 34,
+    y: 19,
+    width: 28,
+    height: 12,
+  },
   images: {},
 };
 
@@ -225,6 +240,7 @@ function toStoredSettings(settings: Settings): StoredSettings {
     blinkEnabled: settings.blinkEnabled,
     motionEnabled: settings.motionEnabled,
     lifeIntensity: settings.lifeIntensity,
+    blinkCrop: settings.blinkCrop,
   };
 }
 
@@ -244,6 +260,7 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     motionEnabled: settings.motionEnabled,
     lifeIntensity: settings.lifeIntensity,
     normalBlinkImage: settings.normalBlinkImage,
+    blinkCrop: settings.blinkCrop,
   };
 }
 
@@ -405,6 +422,7 @@ function App() {
     confidence: 0,
     status: "待機中",
   });
+  const [manualBlinkSignal, setManualBlinkSignal] = useState(0);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [cameraError, setCameraError] = useState("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -518,7 +536,7 @@ function App() {
 
   return (
     <main className={`app ${route}`}>
-      <AvatarStage reaction={reaction} route={route} settings={settings} />
+      <AvatarStage manualBlinkSignal={manualBlinkSignal} reaction={reaction} route={route} settings={settings} />
       <video ref={videoRef} className="trackingVideo" muted playsInline />
 
       {route === "settings" && (
@@ -527,6 +545,7 @@ function App() {
           debug={debug}
           devices={devices}
           onChange={updateSettings}
+          onManualBlink={() => setManualBlinkSignal((value) => value + 1)}
           onManualReaction={setReaction}
           reaction={reaction}
           settings={settings}
@@ -899,11 +918,29 @@ function randomBetween(min: number, max: number) {
   return Math.round(min + Math.random() * (max - min));
 }
 
-function useNormalBlink(reaction: Reaction, settings: Settings) {
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function clampBlinkCrop(crop: BlinkCrop): BlinkCrop {
+  const x = clamp(Math.round(crop.x), 0, 98);
+  const y = clamp(Math.round(crop.y), 0, 98);
+  const width = clamp(Math.round(crop.width), 1, 100 - x);
+  const height = clamp(Math.round(crop.height), 1, 100 - y);
+  return { x, y, width, height };
+}
+
+function useNormalBlink(reaction: Reaction, settings: Settings, manualBlinkSignal: number) {
   const [isBlinking, setIsBlinking] = useState(false);
+  const canBlink =
+    reaction === "normal" &&
+    settings.lifeEnabled &&
+    settings.blinkEnabled &&
+    Boolean(settings.normalBlinkImage) &&
+    isValidBlinkCrop(settings.blinkCrop);
 
   useEffect(() => {
-    if (reaction !== "normal" || !settings.lifeEnabled || !settings.blinkEnabled || !settings.normalBlinkImage) {
+    if (!canBlink) {
       setIsBlinking(false);
       return;
     }
@@ -946,15 +983,45 @@ function useNormalBlink(reaction: Reaction, settings: Settings) {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [reaction, settings.blinkEnabled, settings.lifeEnabled, settings.normalBlinkImage]);
+  }, [canBlink]);
+
+  useEffect(() => {
+    if (!manualBlinkSignal || !canBlink) return;
+    setIsBlinking(true);
+    const timeout = window.setTimeout(() => setIsBlinking(false), 150);
+    return () => window.clearTimeout(timeout);
+  }, [canBlink, manualBlinkSignal]);
 
   return isBlinking;
 }
 
-function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route: AppRoute; settings: Settings }) {
-  const isBlinking = useNormalBlink(reaction, settings);
-  const normalImage = isBlinking && settings.normalBlinkImage ? settings.normalBlinkImage : settings.images.normal;
-  const image = reaction === "normal" ? normalImage : settings.images[reaction];
+function isValidBlinkCrop(crop: BlinkCrop) {
+  return crop.width > 0 && crop.height > 0 && crop.x >= 0 && crop.y >= 0 && crop.x + crop.width <= 100 && crop.y + crop.height <= 100;
+}
+
+function getBlinkClipPath(crop: BlinkCrop) {
+  const top = crop.y;
+  const right = 100 - crop.x - crop.width;
+  const bottom = 100 - crop.y - crop.height;
+  const left = crop.x;
+  return `inset(${top}% ${right}% ${bottom}% ${left}%)`;
+}
+
+function AvatarStage({
+  manualBlinkSignal,
+  reaction,
+  route,
+  settings,
+}: {
+  manualBlinkSignal: number;
+  reaction: Reaction;
+  route: AppRoute;
+  settings: Settings;
+}) {
+  const isBlinking = useNormalBlink(reaction, settings, manualBlinkSignal);
+  const image = settings.images[reaction];
+  const showBlinkOverlay = reaction === "normal" && isBlinking && Boolean(settings.normalBlinkImage) && isValidBlinkCrop(settings.blinkCrop);
+  const showBlinkGuide = route === "settings" && reaction === "normal" && settings.blinkEnabled && Boolean(settings.normalBlinkImage);
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
   const useAvatarLayout = route !== "settings";
   const size = useAvatarLayout ? settings.avatarSize : settings.size;
@@ -990,9 +1057,13 @@ function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route:
             <ReactionEffects reaction={reaction} />
             <AvatarImage
               alt={label}
+              blinkCrop={settings.blinkCrop}
+              blinkOverlaySrc={reaction === "normal" ? settings.normalBlinkImage : undefined}
               outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
               primarySrc={image}
               reaction={reaction}
+              showBlinkGuide={showBlinkGuide}
+              showBlinkOverlay={showBlinkOverlay}
               staticSrc={staticImage}
             />
           </div>
@@ -1004,19 +1075,28 @@ function AvatarStage({ reaction, route, settings }: { reaction: Reaction; route:
 
 function AvatarImage({
   alt,
+  blinkCrop,
+  blinkOverlaySrc,
   outlineWidth,
   primarySrc,
   reaction,
+  showBlinkGuide,
+  showBlinkOverlay,
   staticSrc,
 }: {
   alt: string;
+  blinkCrop: BlinkCrop;
+  blinkOverlaySrc: string | undefined;
   outlineWidth: string;
   primarySrc: string | undefined;
   reaction: Reaction;
+  showBlinkGuide: boolean;
+  showBlinkOverlay: boolean;
   staticSrc: string;
 }) {
   const [failedSrc, setFailedSrc] = useState("");
   const src = primarySrc ?? staticSrc;
+  const blinkClipPath = getBlinkClipPath(blinkCrop);
 
   useEffect(() => {
     setFailedSrc("");
@@ -1032,16 +1112,40 @@ function AvatarImage({
   }
 
   return (
-    <img
-      className="avatarImage"
-      src={src}
-      alt={alt}
-      draggable={false}
-      onError={() => setFailedSrc(src)}
-      style={{
-        ["--outline-width" as string]: outlineWidth,
-      }}
-    />
+    <div className="avatarImageWrap">
+      <img
+        className="avatarImage"
+        src={src}
+        alt={alt}
+        draggable={false}
+        onError={() => setFailedSrc(src)}
+        style={{
+          ["--outline-width" as string]: outlineWidth,
+        }}
+      />
+      {blinkOverlaySrc && (
+        <img
+          className={`blinkOverlayImage${showBlinkOverlay ? " visible" : ""}`}
+          src={blinkOverlaySrc}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{ clipPath: blinkClipPath }}
+        />
+      )}
+      {showBlinkGuide && (
+        <span
+          className="blinkCropGuide"
+          aria-hidden="true"
+          style={{
+            left: `${blinkCrop.x}%`,
+            top: `${blinkCrop.y}%`,
+            width: `${blinkCrop.width}%`,
+            height: `${blinkCrop.height}%`,
+          }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -1089,6 +1193,7 @@ type SettingsPanelProps = {
   devices: MediaDeviceInfo[];
   cameraError: string;
   onChange: (patch: Partial<Settings>) => void;
+  onManualBlink: () => void;
   onManualReaction: (reaction: Reaction) => void;
 };
 
@@ -1099,9 +1204,13 @@ function SettingsPanel({
   devices,
   cameraError,
   onChange,
+  onManualBlink,
   onManualReaction,
 }: SettingsPanelProps) {
   const [imageMessage, setImageMessage] = useState("");
+  const updateBlinkCrop = (patch: Partial<BlinkCrop>) => {
+    onChange({ blinkCrop: clampBlinkCrop({ ...settings.blinkCrop, ...patch }) });
+  };
 
   const handleImageUpload = (slot: ImageSlot, file: File | undefined) => {
     if (!file) return;
@@ -1406,6 +1515,41 @@ function SettingsPanel({
             </button>
           </div>
         </div>
+        <div className="rangeGroup">
+          <p className="hint">黄色い枠を通常画像の目元に合わせてください。</p>
+          <Range
+            label="目元 X"
+            min={0}
+            max={98}
+            step={1}
+            value={settings.blinkCrop.x}
+            onChange={(x) => updateBlinkCrop({ x })}
+          />
+          <Range
+            label="目元 Y"
+            min={0}
+            max={98}
+            step={1}
+            value={settings.blinkCrop.y}
+            onChange={(y) => updateBlinkCrop({ y })}
+          />
+          <Range
+            label="目元 幅"
+            min={1}
+            max={100}
+            step={1}
+            value={settings.blinkCrop.width}
+            onChange={(width) => updateBlinkCrop({ width })}
+          />
+          <Range
+            label="目元 高さ"
+            min={1}
+            max={100}
+            step={1}
+            value={settings.blinkCrop.height}
+            onChange={(height) => updateBlinkCrop({ height })}
+          />
+        </div>
         <p className="hint">まばたきは通常表示中だけ有効です。未登録の場合は自動で何もしません。</p>
       </section>
 
@@ -1533,6 +1677,13 @@ function SettingsPanel({
               {item.label}
             </button>
           ))}
+          <button
+            type="button"
+            disabled={reaction !== "normal" || !settings.normalBlinkImage || !isValidBlinkCrop(settings.blinkCrop)}
+            onClick={onManualBlink}
+          >
+            目閉じ
+          </button>
         </div>
       </section>
     </aside>

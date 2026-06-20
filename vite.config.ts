@@ -19,6 +19,12 @@ let sharedSettings = {
   motionEnabled: true,
   lifeIntensity: "standard",
   normalBlinkImage: undefined as string | undefined,
+  blinkCrop: {
+    x: 34,
+    y: 19,
+    width: 28,
+    height: 12,
+  },
 };
 const clients = new Set<{
   write: (chunk: string) => void;

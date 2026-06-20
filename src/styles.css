@@ -199,8 +199,16 @@ button:disabled:hover {
   will-change: transform, filter;
 }
 
-.avatarImage {
+.avatarImageWrap {
   --outline-width: 3px;
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  line-height: 0;
+}
+
+.avatarImage {
   position: relative;
   z-index: 2;
   display: block;
@@ -225,6 +233,34 @@ button:disabled:hover {
 
 .avatarImage {
   animation: imageSettle 520ms ease-out both;
+}
+
+.blinkOverlayImage {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.blinkOverlayImage.visible {
+  opacity: 1;
+}
+
+.blinkCropGuide {
+  position: absolute;
+  z-index: 4;
+  border: 2px solid rgba(255, 244, 153, 0.95);
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(54, 36, 0, 0.52),
+    0 0 18px rgba(255, 225, 88, 0.28);
+  background: rgba(255, 235, 96, 0.08);
+  pointer-events: none;
 }
 
 .life-on.motion-on.reaction-normal .avatar {
@@ -747,6 +783,15 @@ input[type="range"] {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.rangeGroup {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(8, 13, 22, 0.22);
 }
 
 .fileSlot span {
