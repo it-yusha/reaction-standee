@@ -144,8 +144,6 @@ button:disabled:hover {
   left: 50%;
   top: 50%;
   width: var(--avatar-size);
-  max-width: 96%;
-  max-height: 96%;
   display: flex;
   align-items: center;
   justify-content: center;
