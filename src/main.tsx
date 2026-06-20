@@ -648,7 +648,7 @@ function App() {
   });
 
   useLipSyncAudio({
-    enabled: route !== "avatar" && settings.lifeEnabled && settings.lipSyncEnabled && settings.audioInputEnabled,
+    enabled: route !== "avatar" && settings.lipSyncEnabled && settings.audioInputEnabled,
     deviceId: settings.selectedAudioDeviceId,
     threshold: settings.mouthThreshold,
     onDebug: setAudioDebug,
@@ -1355,7 +1355,6 @@ function AvatarStage({
   const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, settings.mouthImages) : undefined;
   const showMouthOverlay =
     reaction === "normal" &&
-    settings.lifeEnabled &&
     settings.lipSyncEnabled &&
     mouthShape !== "closed" &&
     Boolean(mouthOverlaySrc) &&
@@ -1733,7 +1732,6 @@ function SettingsPanel({
             ...settings.mouthImages,
             [slot]: dataUrl,
           },
-          lifeEnabled: true,
           lipSyncEnabled: true,
         });
         return saveMouthImage(slot, dataUrl).then(() => {
@@ -2024,6 +2022,7 @@ function SettingsPanel({
         </div>
         <p className="hint">{audioDebug.status}</p>
         {audioError && <p className="error">{audioError}</p>}
+        <p className="hint">通常表示中だけ、登録した口元差分を音量に合わせて重ねます。マイク連動には「口パク」と「マイク音声で動かす」の両方をONにしてください。</p>
         <div className="imageGrid">
           {mouthImageSlots.map((item) => (
             <div key={item.key} className="fileSlot">
