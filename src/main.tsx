@@ -881,8 +881,11 @@ function getAppRoute(): AppRoute {
 
 function App() {
   const route = getAppRoute();
+  const isElectron = navigator.userAgent.includes("Electron");
+  const isDisplayOnlyRoute = route === "avatar" || (route === "record" && isElectron);
   const [settings, setSettings] = useState<Settings>(() => readSettings());
   const [reaction, setReaction] = useState<Reaction>("normal");
+  const [reactionSignal, setReactionSignal] = useState(() => performance.now());
   const [debug, setDebug] = useState<TrackingDebug>({
     candidate: "normal",
     stableForMs: 0,
@@ -1024,21 +1027,21 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (route === "avatar") return;
+    if (isDisplayOnlyRoute) return;
     void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume, cameraFollow, settings).catch(
       () => undefined,
     );
-  }, [reaction, route, settings]);
+  }, [isDisplayOnlyRoute, reaction, settings]);
 
   useEffect(() => {
-    if (route === "avatar") return;
+    if (isDisplayOnlyRoute) return;
     void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume, cameraFollow).catch(
       () => undefined,
     );
-  }, [cameraFollow, mouthShape, reaction, route]);
+  }, [cameraFollow, isDisplayOnlyRoute, mouthShape, reaction]);
 
   useEffect(() => {
-    if (route !== "avatar") return;
+    if (!isDisplayOnlyRoute) return;
     let cancelled = false;
     let lastUpdatedAt = 0;
     let fallbackInterval = 0;
@@ -1047,6 +1050,7 @@ function App() {
       if (!cancelled && payload && payload.updatedAt !== lastUpdatedAt) {
         lastUpdatedAt = payload.updatedAt;
         setReaction(payload.reaction);
+        setReactionSignal(payload.updatedAt || performance.now());
         setMouthShape(payload.reaction === "normal" && payload.mouthShape ? payload.mouthShape : "closed");
         setAudioDebug((current) => ({
           ...current,
@@ -1081,9 +1085,9 @@ function App() {
         fallbackInterval = window.setInterval(syncReaction, AVATAR_SYNC_INTERVAL_MS);
       }
     };
+    startFallbackPolling();
 
     if (!("EventSource" in window)) {
-      startFallbackPolling();
       return () => {
         cancelled = true;
         window.clearInterval(fallbackInterval);
@@ -1112,10 +1116,10 @@ function App() {
       events.close();
       window.clearInterval(fallbackInterval);
     };
-  }, [route]);
+  }, [isDisplayOnlyRoute, updateSettings]);
 
   usePoseTracking({
-    enabled: route !== "avatar" && settings.trackingEnabled,
+    enabled: !isDisplayOnlyRoute && settings.trackingEnabled,
     deviceId: settings.selectedDeviceId,
     sensitivity: settings.sensitivity,
     videoRef,
@@ -1127,7 +1131,7 @@ function App() {
   });
 
   useLipSyncAudio({
-    enabled: route !== "avatar" && settings.lipSyncEnabled && settings.audioInputEnabled,
+    enabled: !isDisplayOnlyRoute && settings.lipSyncEnabled && settings.audioInputEnabled,
     calibrationSignal: audioCalibrationSignal,
     deviceId: settings.selectedAudioDeviceId,
     threshold: settings.mouthThreshold,
@@ -1154,7 +1158,7 @@ function App() {
     setManualGazeRequest((current) => ({ direction, signal: current.signal + 1 }));
   }, []);
 
-  const isElectronRecord = route === "record" && navigator.userAgent.includes("Electron");
+  const isElectronRecord = route === "record" && isElectron;
 
   return (
     <main className={`app ${route}${isElectronRecord ? " electronRecord" : ""}`}>
@@ -1165,6 +1169,7 @@ function App() {
         mouthShape={mouthShape}
         onGazeDebug={setGazeDebug}
         reaction={reaction}
+        reactionSignal={reactionSignal}
         route={route}
         settings={settings}
         audioLevel={audioDebug.volume}
@@ -2814,6 +2819,7 @@ function AvatarStage({
   onGazeDebug,
   onVisualState,
   reaction,
+  reactionSignal,
   route,
   settings,
 }: {
@@ -2825,6 +2831,7 @@ function AvatarStage({
   onGazeDebug: (debug: GazeDebug) => void;
   onVisualState: (state: AvatarVisualState) => void;
   reaction: Reaction;
+  reactionSignal: number;
   route: AppRoute;
   settings: Settings;
 }) {
@@ -2874,7 +2881,7 @@ function AvatarStage({
 
   useEffect(() => {
     setReactionStartedAt(performance.now());
-  }, [reaction]);
+  }, [reaction, reactionSignal]);
 
   useEffect(() => {
     onVisualState({ isBlinking, eyeDirection, reactionStartedAt });
@@ -2902,8 +2909,8 @@ function AvatarStage({
             transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
           }}
         >
-          <div key={reaction} className="avatar">
-            <ReactionEffects reaction={reaction} />
+          <div key={`${reaction}-${reactionSignal}`} className="avatar">
+            <ReactionEffects reaction={reaction} reactionSignal={reactionSignal} />
             <div className="avatarLifeLayer" style={lifeMotionStyle}>
               <div className={`avatarTalkLayer${reaction === "normal" && settings.lifeEnabled && settings.speechMotionEnabled && mouthShape !== "closed" ? " speaking" : ""}`}>
                 <AvatarImage
@@ -3056,10 +3063,10 @@ function AvatarImage({
   );
 }
 
-function ReactionEffects({ reaction }: { reaction: Reaction }) {
+function ReactionEffects({ reaction, reactionSignal }: { reaction: Reaction; reactionSignal: number }) {
   if (reaction === "joy") {
     return (
-      <div className="effectLayer joyFx" aria-hidden="true">
+      <div key={`joy-${reactionSignal}`} className="effectLayer joyFx" aria-hidden="true">
         <img className="effectAsset joyAsset" src="/effects/joy-sparkle-field.svg" alt="" draggable={false} />
         <span className="jumpShadow" />
         <i />
@@ -3070,19 +3077,19 @@ function ReactionEffects({ reaction }: { reaction: Reaction }) {
 
   if (reaction === "surprised") {
     return (
-      <div className="effectLayer surprisedFx" aria-hidden="true">
+      <div key={`surprised-${reactionSignal}`} className="effectLayer surprisedFx" aria-hidden="true">
         <img className="effectAsset surprisedAsset" src="/effects/surprised-shockwave.svg" alt="" draggable={false} />
       </div>
     );
   }
 
   if (reaction === "troubled") {
-    return <div className="effectLayer troubledFx" aria-hidden="true" />;
+    return <div key={`troubled-${reactionSignal}`} className="effectLayer troubledFx" aria-hidden="true" />;
   }
 
   if (reaction === "explain") {
     return (
-      <div className="effectLayer explainFx" aria-hidden="true">
+      <div key={`explain-${reactionSignal}`} className="effectLayer explainFx" aria-hidden="true">
         <img className="effectAsset explainAsset" src="/effects/explain-pointer-light.svg" alt="" draggable={false} />
         <span className="explainGlow" />
         <span className="pointerBeam" />
@@ -3787,13 +3794,13 @@ function SettingsPanel({
 
       <section className="section">
         <h2>表示</h2>
-        <p className="hint">設定画面プレビュー</p>
-        <Range label="サイズ" min={180} max={1300} step={10} value={settings.size} onChange={(size) => onChange({ size })} />
-        <Range label="位置 X" min={-900} max={900} step={5} value={settings.x} onChange={(x) => onChange({ x })} />
-        <Range label="位置 Y" min={-520} max={520} step={5} value={settings.y} onChange={(y) => onChange({ y })} />
-        <p className="hint">/avatar OBS表示</p>
+        <p className="hint">設定画面の左プレビューだけに反映されます。</p>
+        <Range label="プレビューサイズ" min={180} max={1300} step={10} value={settings.size} onChange={(size) => onChange({ size })} />
+        <Range label="プレビュー位置 X" min={-900} max={900} step={5} value={settings.x} onChange={(x) => onChange({ x })} />
+        <Range label="プレビュー位置 Y" min={-520} max={520} step={5} value={settings.y} onChange={(y) => onChange({ y })} />
+        <p className="hint">録画表示、Electronウィンドウ、/record に反映されます。録画の見た目はこちらを調整してください。</p>
         <Range
-          label="OBSサイズ"
+          label="録画表示サイズ"
           min={180}
           max={1300}
           step={10}
@@ -3801,7 +3808,7 @@ function SettingsPanel({
           onChange={(avatarSize) => onChange({ avatarSize })}
         />
         <Range
-          label="OBS位置 X"
+          label="録画表示位置 X"
           min={-900}
           max={900}
           step={5}
@@ -3809,7 +3816,7 @@ function SettingsPanel({
           onChange={(avatarX) => onChange({ avatarX })}
         />
         <Range
-          label="OBS位置 Y"
+          label="録画表示位置 Y"
           min={-520}
           max={520}
           step={5}

@@ -65,6 +65,46 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function canReachUrl(url) {
+  return new Promise((resolve) => {
+    const request = http.get(url, (response) => {
+      response.resume();
+      resolve((response.statusCode || 500) < 500);
+    });
+    request.setTimeout(800, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on("error", () => resolve(false));
+  });
+}
+
+function proxyDevServerRequest(req, res) {
+  const targetUrl = new URL(req.url || "/", "http://127.0.0.1:5173");
+  const proxyReq = http.request(
+    {
+      hostname: "127.0.0.1",
+      port: 5173,
+      path: `${targetUrl.pathname}${targetUrl.search}`,
+      method: req.method,
+      headers: {
+        ...req.headers,
+        host: "127.0.0.1:5173",
+      },
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    },
+  );
+
+  proxyReq.on("error", () => {
+    sendJson(res, 502, { error: "Dev server is not available" });
+  });
+
+  req.pipe(proxyReq);
+}
+
 async function handleAssetRequest(req, res, pathname) {
   const prefix = "/api/assets";
   const key = pathname === prefix || pathname === `${prefix}/` ? "" : decodeURIComponent(pathname.slice(`${prefix}/`.length));
@@ -197,6 +237,16 @@ function startLocalServer() {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url || "/", "http://127.0.0.1");
+      if (
+        url.pathname === "/api/reaction" ||
+        url.pathname === "/api/reaction/" ||
+        url.pathname === "/api/reaction/events" ||
+        url.pathname === "/api/reaction/events/"
+      ) {
+        proxyDevServerRequest(req, res);
+        return;
+      }
+
       if (url.pathname === "/api/settings" || url.pathname === "/api/settings/") {
         void handleSettingsRequest(req, res);
         return;
@@ -226,6 +276,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 540,
     height: 960,
+    useContentSize: true,
     minWidth: 360,
     minHeight: 640,
     resizable: false,
@@ -247,7 +298,7 @@ async function createWindow() {
     return { action: "deny" };
   });
 
-  if (isDev) {
+  if (isDev || (await canReachUrl(devServerUrl))) {
     void mainWindow.loadURL(devServerUrl);
   } else {
     const url = await startLocalServer();
