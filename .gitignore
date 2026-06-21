@@ -4,3 +4,4 @@ dist/
 vite.config.d.ts
 vite.config.js
 .DS_Store
+.reaction-standee/

@@ -14,14 +14,18 @@ type Reaction = "normal" | "joy" | "surprised" | "troubled" | "explain";
 type ImageSlot = Reaction;
 type BackgroundMode = "transparent" | "green" | "color" | "image";
 type Sensitivity = "low" | "standard" | "high";
-type AppRoute = "settings" | "avatar" | "capture";
+type AppRoute = "settings" | "avatar" | "capture" | "record" | "canvas";
 type CanvasAspectRatio = "9:16" | "16:9";
 type LifeIntensity = "subtle" | "standard" | "strong";
+type LifeMode = "off" | "subtle" | "standard" | "strong" | "check";
+type OutlineQuality = "light" | "standard";
 type MouthShape = "closed" | "smallOpen" | "wideOpen";
 type MouthImageSlot = Exclude<MouthShape, "closed">;
+type EyeImageSlot = "lookLeft" | "lookRight";
 
 type ReactionImages = Record<ImageSlot, string>;
 type MouthImages = Partial<Record<MouthImageSlot, string>>;
+type EyeImages = Partial<Record<EyeImageSlot, string>>;
 type ImageDbKey = string;
 
 type CropRect = {
@@ -47,6 +51,8 @@ type Settings = {
   avatarY: number;
   outlineEnabled: boolean;
   outlineWidth: number;
+  outlineQuality: OutlineQuality;
+  adjustmentGuidesEnabled: boolean;
   canvasAspectRatio: CanvasAspectRatio;
   backgroundMode: BackgroundMode;
   backgroundColor: string;
@@ -54,8 +60,16 @@ type Settings = {
   lifeEnabled: boolean;
   blinkEnabled: boolean;
   motionEnabled: boolean;
+  lifeV2Enabled: boolean;
+  speechMotionEnabled: boolean;
+  idleMotionEnabled: boolean;
+  gazeEnabled: boolean;
+  cameraFollowEnabled: boolean;
+  lifeMotionStrength: number;
+  cameraFollowStrength: number;
   lifeIntensity: LifeIntensity;
   normalBlinkImage?: string;
+  eyeImages: EyeImages;
   blinkCrop: BlinkCrop;
   lipSyncEnabled: boolean;
   audioInputEnabled: boolean;
@@ -65,7 +79,7 @@ type Settings = {
   images: Partial<ReactionImages>;
 };
 
-type StoredSettings = Omit<Settings, "images" | "backgroundImage" | "normalBlinkImage" | "mouthImages">;
+type StoredSettings = Omit<Settings, "images" | "backgroundImage" | "normalBlinkImage" | "eyeImages" | "mouthImages">;
 
 type TrackingDebug = {
   candidate: Reaction;
@@ -76,8 +90,53 @@ type TrackingDebug = {
 
 type AudioDebug = {
   volume: number;
+  speechLevel: number;
   mouthShape: MouthShape;
   status: string;
+};
+
+type SpeechIntensity = "soft" | "medium" | "strong";
+
+type CameraFollow = {
+  x: number;
+  y: number;
+  visible: boolean;
+};
+
+type EyeDirection = "center" | EyeImageSlot;
+
+type GazeDebug = {
+  direction: EyeDirection;
+  status: string;
+  canGaze: boolean;
+  hasLeft: boolean;
+  hasRight: boolean;
+  cropValid: boolean;
+};
+
+type AvatarVisualState = {
+  isBlinking: boolean;
+  eyeDirection: EyeDirection;
+  reactionStartedAt: number;
+};
+
+type RecordingState = "idle" | "recording" | "ready" | "error";
+
+type RecordingFrameMetrics = {
+  scaleX: number;
+  scaleY: number;
+  avatarTransform: RecordingTransform;
+  lifeTransform: RecordingTransform;
+  talkTransform: RecordingTransform;
+};
+
+type RecordingTransform = {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
 };
 
 type Classification = {
@@ -90,8 +149,15 @@ type SharedReactionPayload = {
   reaction: Reaction;
   mouthShape?: MouthShape;
   audioLevel?: number;
+  cameraFollow?: CameraFollow;
   updatedAt: number;
+  settingsUpdatedAt?: number;
   settings?: SharedAvatarSettings;
+};
+
+type SharedStoredSettingsPayload = {
+  settings?: Partial<StoredSettings>;
+  updatedAt?: number;
 };
 
 type SharedAvatarSettings = Pick<
@@ -101,6 +167,8 @@ type SharedAvatarSettings = Pick<
   | "avatarY"
   | "outlineEnabled"
   | "outlineWidth"
+  | "outlineQuality"
+  | "adjustmentGuidesEnabled"
   | "canvasAspectRatio"
   | "backgroundMode"
   | "backgroundColor"
@@ -108,8 +176,16 @@ type SharedAvatarSettings = Pick<
   | "lifeEnabled"
   | "blinkEnabled"
   | "motionEnabled"
+  | "lifeV2Enabled"
+  | "speechMotionEnabled"
+  | "idleMotionEnabled"
+  | "gazeEnabled"
+  | "cameraFollowEnabled"
+  | "lifeMotionStrength"
+  | "cameraFollowStrength"
   | "lifeIntensity"
   | "normalBlinkImage"
+  | "eyeImages"
   | "blinkCrop"
   | "lipSyncEnabled"
   | "audioInputEnabled"
@@ -127,13 +203,26 @@ const IMAGE_DB_NAME = "reaction-standee-images";
 const IMAGE_STORE_NAME = "images";
 const BACKGROUND_IMAGE_KEY = "__background__";
 const NORMAL_BLINK_IMAGE_KEY = "__normal_blink__";
+const EYE_IMAGE_KEYS: Record<EyeImageSlot, string> = {
+  lookLeft: "__eye_look_left__",
+  lookRight: "__eye_look_right__",
+};
 const MOUTH_IMAGE_KEYS: Record<MouthImageSlot, string> = {
   smallOpen: "__mouth_small_open__",
   wideOpen: "__mouth_wide_open__",
 };
 const SHARED_REACTION_URL = "/api/reaction";
 const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
+const SHARED_ASSETS_URL = "/api/assets";
+const SHARED_SETTINGS_URL = "/api/settings";
 const AVATAR_SYNC_INTERVAL_MS = 50;
+const LIP_SYNC_CALIBRATION_WARMUP_MS = 350;
+const LIP_SYNC_CALIBRATION_MS = 1250;
+const LIP_SYNC_START_HOLD_MS = 70;
+const LIP_SYNC_END_HOLD_MS = 260;
+const LIP_SYNC_MIN_SHAPE_HOLD_MS = 90;
+const LIP_SYNC_NOISE_MARGIN_MIN = 1.2;
+const LIP_SYNC_NOISE_MARGIN_RATIO = 0.035;
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 const HAND_MODEL_URL =
@@ -161,9 +250,22 @@ const mouthImageSlots: Array<{ key: MouthImageSlot; label: string; file: string 
   { key: "wideOpen", label: "大開き口", file: "mouth_wide_open.png" },
 ];
 
+const eyeImageSlots: Array<{ key: EyeImageSlot; label: string; file: string }> = [
+  { key: "lookLeft", label: "目線左", file: "eyes_left.png" },
+  { key: "lookRight", label: "目線右", file: "eyes_right.png" },
+];
+
 const canvasAspectRatios: Array<{ key: CanvasAspectRatio; label: string; value: number }> = [
   { key: "9:16", label: "9:16 ショート動画", value: 9 / 16 },
   { key: "16:9", label: "16:9 横動画", value: 16 / 9 },
+];
+
+const lifeModeOptions: Array<{ key: LifeMode; label: string }> = [
+  { key: "off", label: "OFF" },
+  { key: "subtle", label: "弱" },
+  { key: "standard", label: "標準" },
+  { key: "strong", label: "強" },
+  { key: "check", label: "確認用" },
 ];
 
 const sensitivityProfile: Record<
@@ -220,6 +322,8 @@ const defaultSettings: Settings = {
   avatarY: 0,
   outlineEnabled: true,
   outlineWidth: 3,
+  outlineQuality: "standard",
+  adjustmentGuidesEnabled: true,
   canvasAspectRatio: "9:16",
   backgroundMode: "transparent",
   backgroundColor: "#111827",
@@ -227,8 +331,16 @@ const defaultSettings: Settings = {
   lifeEnabled: true,
   blinkEnabled: true,
   motionEnabled: true,
+  lifeV2Enabled: true,
+  speechMotionEnabled: true,
+  idleMotionEnabled: true,
+  gazeEnabled: true,
+  cameraFollowEnabled: true,
+  lifeMotionStrength: 50,
+  cameraFollowStrength: 35,
   lifeIntensity: "standard",
   normalBlinkImage: undefined,
+  eyeImages: {},
   blinkCrop: {
     x: 34,
     y: 19,
@@ -258,11 +370,34 @@ function readSettings(): Settings {
       ...parsed,
       backgroundImage: undefined,
       normalBlinkImage: undefined,
+      eyeImages: {},
       mouthImages: {},
       images: {},
     };
   } catch {
     return defaultSettings;
+  }
+}
+
+async function readSharedStoredSettingsPayload(): Promise<SharedStoredSettingsPayload | undefined> {
+  try {
+    const response = await fetch(SHARED_SETTINGS_URL, { cache: "no-store" });
+    if (!response.ok) return undefined;
+    return (await response.json()) as SharedStoredSettingsPayload;
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveSharedStoredSettings(settings: StoredSettings) {
+  try {
+    await fetch(SHARED_SETTINGS_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    });
+  } catch {
+    // Browser localStorage remains a fallback when the local API is unavailable.
   }
 }
 
@@ -280,12 +415,21 @@ function toStoredSettings(settings: Settings): StoredSettings {
     avatarY: settings.avatarY,
     outlineEnabled: settings.outlineEnabled,
     outlineWidth: settings.outlineWidth,
+    outlineQuality: settings.outlineQuality,
+    adjustmentGuidesEnabled: settings.adjustmentGuidesEnabled,
     canvasAspectRatio: settings.canvasAspectRatio,
     backgroundMode: settings.backgroundMode,
     backgroundColor: settings.backgroundColor,
     lifeEnabled: settings.lifeEnabled,
     blinkEnabled: settings.blinkEnabled,
     motionEnabled: settings.motionEnabled,
+    lifeV2Enabled: settings.lifeV2Enabled,
+    speechMotionEnabled: settings.speechMotionEnabled,
+    idleMotionEnabled: settings.idleMotionEnabled,
+    gazeEnabled: settings.gazeEnabled,
+    cameraFollowEnabled: settings.cameraFollowEnabled,
+    lifeMotionStrength: settings.lifeMotionStrength,
+    cameraFollowStrength: settings.cameraFollowStrength,
     lifeIntensity: settings.lifeIntensity,
     blinkCrop: settings.blinkCrop,
     lipSyncEnabled: settings.lipSyncEnabled,
@@ -302,6 +446,8 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     avatarY: settings.avatarY,
     outlineEnabled: settings.outlineEnabled,
     outlineWidth: settings.outlineWidth,
+    outlineQuality: settings.outlineQuality,
+    adjustmentGuidesEnabled: settings.adjustmentGuidesEnabled,
     canvasAspectRatio: settings.canvasAspectRatio,
     backgroundMode: settings.backgroundMode,
     backgroundColor: settings.backgroundColor,
@@ -309,8 +455,16 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     lifeEnabled: settings.lifeEnabled,
     blinkEnabled: settings.blinkEnabled,
     motionEnabled: settings.motionEnabled,
+    lifeV2Enabled: settings.lifeV2Enabled,
+    speechMotionEnabled: settings.speechMotionEnabled,
+    idleMotionEnabled: settings.idleMotionEnabled,
+    gazeEnabled: settings.gazeEnabled,
+    cameraFollowEnabled: settings.cameraFollowEnabled,
+    lifeMotionStrength: settings.lifeMotionStrength,
+    cameraFollowStrength: settings.cameraFollowStrength,
     lifeIntensity: settings.lifeIntensity,
     normalBlinkImage: settings.normalBlinkImage,
+    eyeImages: settings.eyeImages,
     blinkCrop: settings.blinkCrop,
     lipSyncEnabled: settings.lipSyncEnabled,
     audioInputEnabled: settings.audioInputEnabled,
@@ -318,6 +472,59 @@ function toSharedAvatarSettings(settings: Settings): SharedAvatarSettings {
     mouthCrop: settings.mouthCrop,
     mouthImages: settings.mouthImages,
   };
+}
+
+function getLifeMode(settings: Settings): LifeMode {
+  if (!settings.lifeEnabled) return "off";
+  if (settings.lifeIntensity === "strong" && settings.lifeMotionStrength >= 90 && settings.cameraFollowStrength >= 90) {
+    return "check";
+  }
+  return settings.lifeIntensity;
+}
+
+function getLifeModePatch(mode: LifeMode): Partial<Settings> {
+  if (mode === "off") {
+    return { lifeEnabled: false };
+  }
+
+  const presets: Record<Exclude<LifeMode, "off">, Partial<Settings>> = {
+    subtle: {
+      lifeEnabled: true,
+      lifeV2Enabled: true,
+      lifeIntensity: "subtle",
+      lifeMotionStrength: 30,
+      cameraFollowStrength: 25,
+    },
+    standard: {
+      lifeEnabled: true,
+      lifeV2Enabled: true,
+      lifeIntensity: "standard",
+      lifeMotionStrength: 50,
+      cameraFollowStrength: 35,
+    },
+    strong: {
+      lifeEnabled: true,
+      lifeV2Enabled: true,
+      lifeIntensity: "strong",
+      lifeMotionStrength: 75,
+      cameraFollowStrength: 70,
+    },
+    check: {
+      lifeEnabled: true,
+      lifeV2Enabled: true,
+      lifeIntensity: "strong",
+      lifeMotionStrength: 100,
+      cameraFollowEnabled: true,
+      cameraFollowStrength: 100,
+      speechMotionEnabled: true,
+      idleMotionEnabled: true,
+      gazeEnabled: true,
+      motionEnabled: true,
+      blinkEnabled: true,
+    },
+  };
+
+  return presets[mode];
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -338,6 +545,89 @@ function openImageDb(): Promise<IDBDatabase> {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+async function readSharedAssetMap(): Promise<Record<string, string>> {
+  try {
+    const response = await fetch(SHARED_ASSETS_URL, { cache: "no-store" });
+    if (!response.ok) return {};
+    const payload = (await response.json()) as { assets?: Record<string, string> };
+    return payload.assets ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveSharedAsset(key: ImageDbKey, dataUrl: string) {
+  try {
+    await fetch(`${SHARED_ASSETS_URL}/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataUrl }),
+    });
+  } catch {
+    // Shared local storage is best-effort; IndexedDB remains a fallback.
+  }
+}
+
+async function deleteSharedAsset(key: ImageDbKey) {
+  try {
+    await fetch(`${SHARED_ASSETS_URL}/${encodeURIComponent(key)}`, { method: "DELETE" });
+  } catch {
+    // Shared local storage is best-effort; IndexedDB remains a fallback.
+  }
+}
+
+function imageSettingsFromAssetMap(
+  assets: Record<string, string>,
+): Pick<Settings, "images" | "backgroundImage" | "normalBlinkImage" | "eyeImages" | "mouthImages"> {
+  const images = Object.fromEntries(imageSlots.map(({ key }) => [key, assets[key]]).filter(([, value]) => Boolean(value))) as Partial<ReactionImages>;
+  const eyeImages = Object.fromEntries(
+    eyeImageSlots.map(({ key }) => [key, assets[EYE_IMAGE_KEYS[key]]]).filter(([, value]) => Boolean(value)),
+  ) as EyeImages;
+  const mouthImages = Object.fromEntries(
+    mouthImageSlots.map(({ key }) => [key, assets[MOUTH_IMAGE_KEYS[key]]]).filter(([, value]) => Boolean(value)),
+  ) as MouthImages;
+
+  return {
+    images,
+    backgroundImage: assets[BACKGROUND_IMAGE_KEY],
+    normalBlinkImage: assets[NORMAL_BLINK_IMAGE_KEY],
+    eyeImages,
+    mouthImages,
+  };
+}
+
+function assetMapFromImageSettings(
+  imageSettings: Pick<Settings, "images" | "backgroundImage" | "normalBlinkImage" | "eyeImages" | "mouthImages">,
+) {
+  const assets: Record<string, string> = {};
+  imageSlots.forEach(({ key }) => {
+    const dataUrl = imageSettings.images[key];
+    if (dataUrl) assets[key] = dataUrl;
+  });
+  if (imageSettings.backgroundImage) assets[BACKGROUND_IMAGE_KEY] = imageSettings.backgroundImage;
+  if (imageSettings.normalBlinkImage) assets[NORMAL_BLINK_IMAGE_KEY] = imageSettings.normalBlinkImage;
+  eyeImageSlots.forEach(({ key }) => {
+    const dataUrl = imageSettings.eyeImages[key];
+    if (dataUrl) assets[EYE_IMAGE_KEYS[key]] = dataUrl;
+  });
+  mouthImageSlots.forEach(({ key }) => {
+    const dataUrl = imageSettings.mouthImages[key];
+    if (dataUrl) assets[MOUTH_IMAGE_KEYS[key]] = dataUrl;
+  });
+  return assets;
+}
+
+async function migrateIndexedDbImagesToSharedAssets(
+  indexedAssets: Record<string, string>,
+  sharedAssets: Record<string, string>,
+) {
+  await Promise.all(
+    Object.entries(indexedAssets)
+      .filter(([key]) => !sharedAssets[key])
+      .map(([key, dataUrl]) => saveSharedAsset(key, dataUrl)),
+  );
 }
 
 async function loadReactionImages(): Promise<Partial<ReactionImages>> {
@@ -373,6 +663,19 @@ async function loadNormalBlinkImage(): Promise<string | undefined> {
   }
 }
 
+async function loadEyeImages(): Promise<EyeImages> {
+  if (!("indexedDB" in window)) return {};
+  const db = await openImageDb();
+  try {
+    const entries = await Promise.all(
+      eyeImageSlots.map(async ({ key }) => [key, await readImageFromDb(db, EYE_IMAGE_KEYS[key])] as const),
+    );
+    return Object.fromEntries(entries.filter(([, value]) => Boolean(value))) as EyeImages;
+  } finally {
+    db.close();
+  }
+}
+
 async function loadMouthImages(): Promise<MouthImages> {
   if (!("indexedDB" in window)) return {};
   const db = await openImageDb();
@@ -381,6 +684,48 @@ async function loadMouthImages(): Promise<MouthImages> {
       mouthImageSlots.map(async ({ key }) => [key, await readImageFromDb(db, MOUTH_IMAGE_KEYS[key])] as const),
     );
     return Object.fromEntries(entries.filter(([, value]) => Boolean(value))) as MouthImages;
+  } finally {
+    db.close();
+  }
+}
+
+async function loadStoredImageSettings(): Promise<
+  Pick<Settings, "images" | "backgroundImage" | "normalBlinkImage" | "eyeImages" | "mouthImages">
+> {
+  const sharedAssets = await readSharedAssetMap();
+  const sharedImageSettings = imageSettingsFromAssetMap(sharedAssets);
+
+  if (!("indexedDB" in window)) {
+    return sharedImageSettings;
+  }
+
+  const db = await openImageDb();
+  try {
+    const reactionEntries = await Promise.all(
+      imageSlots.map(async ({ key }) => [key, await readImageFromDb(db, key)] as const),
+    );
+    const eyeEntries = await Promise.all(
+      eyeImageSlots.map(async ({ key }) => [key, await readImageFromDb(db, EYE_IMAGE_KEYS[key])] as const),
+    );
+    const mouthEntries = await Promise.all(
+      mouthImageSlots.map(async ({ key }) => [key, await readImageFromDb(db, MOUTH_IMAGE_KEYS[key])] as const),
+    );
+
+    const indexedImageSettings = {
+      images: Object.fromEntries(reactionEntries.filter(([, value]) => Boolean(value))) as Partial<ReactionImages>,
+      backgroundImage: await readImageFromDb(db, BACKGROUND_IMAGE_KEY),
+      normalBlinkImage: await readImageFromDb(db, NORMAL_BLINK_IMAGE_KEY),
+      eyeImages: Object.fromEntries(eyeEntries.filter(([, value]) => Boolean(value))) as EyeImages,
+      mouthImages: Object.fromEntries(mouthEntries.filter(([, value]) => Boolean(value))) as MouthImages,
+    };
+    await migrateIndexedDbImagesToSharedAssets(assetMapFromImageSettings(indexedImageSettings), sharedAssets);
+    return {
+      images: { ...indexedImageSettings.images, ...sharedImageSettings.images },
+      backgroundImage: sharedImageSettings.backgroundImage ?? indexedImageSettings.backgroundImage,
+      normalBlinkImage: sharedImageSettings.normalBlinkImage ?? indexedImageSettings.normalBlinkImage,
+      eyeImages: { ...indexedImageSettings.eyeImages, ...sharedImageSettings.eyeImages },
+      mouthImages: { ...indexedImageSettings.mouthImages, ...sharedImageSettings.mouthImages },
+    };
   } finally {
     db.close();
   }
@@ -395,6 +740,7 @@ function readImageFromDb(db: IDBDatabase, key: ImageDbKey): Promise<string | und
 }
 
 async function saveImageToDb(key: ImageDbKey, dataUrl: string) {
+  await saveSharedAsset(key, dataUrl);
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -432,6 +778,14 @@ async function deleteNormalBlinkImage() {
   return deleteImageFromDb(NORMAL_BLINK_IMAGE_KEY);
 }
 
+async function saveEyeImage(key: EyeImageSlot, dataUrl: string) {
+  return saveImageToDb(EYE_IMAGE_KEYS[key], dataUrl);
+}
+
+async function deleteEyeImage(key: EyeImageSlot) {
+  return deleteImageFromDb(EYE_IMAGE_KEYS[key]);
+}
+
 async function saveMouthImage(key: MouthImageSlot, dataUrl: string) {
   return saveImageToDb(MOUTH_IMAGE_KEYS[key], dataUrl);
 }
@@ -441,6 +795,7 @@ async function deleteMouthImage(key: MouthImageSlot) {
 }
 
 async function deleteImageFromDb(key: ImageDbKey) {
+  await deleteSharedAsset(key);
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -455,6 +810,11 @@ async function deleteImageFromDb(key: ImageDbKey) {
 }
 
 async function clearReactionImages() {
+  try {
+    await fetch(SHARED_ASSETS_URL, { method: "DELETE" });
+  } catch {
+    // Shared local storage is best-effort; IndexedDB remains a fallback.
+  }
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
   try {
@@ -468,13 +828,20 @@ async function clearReactionImages() {
   }
 }
 
-async function publishSharedState(reaction: Reaction, mouthShape: MouthShape, audioLevel: number, settings?: Settings) {
+async function publishSharedState(
+  reaction: Reaction,
+  mouthShape: MouthShape,
+  audioLevel: number,
+  cameraFollow: CameraFollow,
+  settings?: Settings,
+) {
   const body: {
     reaction: Reaction;
     mouthShape: MouthShape;
     audioLevel: number;
+    cameraFollow: CameraFollow;
     settings?: SharedAvatarSettings;
-  } = { reaction, mouthShape, audioLevel };
+  } = { reaction, mouthShape, audioLevel, cameraFollow };
   if (settings) {
     body.settings = toSharedAvatarSettings(settings);
   }
@@ -495,14 +862,25 @@ async function readSharedReaction(): Promise<SharedReactionPayload | undefined> 
     reaction: payload.reaction,
     mouthShape: isMouthShape(payload.mouthShape) ? payload.mouthShape : "closed",
     audioLevel: typeof payload.audioLevel === "number" ? payload.audioLevel : 0,
+    cameraFollow: isCameraFollow(payload.cameraFollow) ? payload.cameraFollow : { x: 0, y: 0, visible: false },
     updatedAt: typeof payload.updatedAt === "number" ? payload.updatedAt : 0,
+    settingsUpdatedAt: typeof payload.settingsUpdatedAt === "number" ? payload.settingsUpdatedAt : undefined,
     settings: payload.settings,
   };
 }
 
+function getAppRoute(): AppRoute {
+  const queryRoute = new URLSearchParams(window.location.search).get("route");
+  const rawRoute = queryRoute ? `/${queryRoute.replace(/^\//, "")}` : window.location.pathname;
+  if (rawRoute === "/avatar") return "avatar";
+  if (rawRoute === "/capture") return "capture";
+  if (rawRoute === "/record") return "record";
+  if (rawRoute === "/canvas") return "canvas";
+  return "settings";
+}
+
 function App() {
-  const route: AppRoute =
-    window.location.pathname === "/avatar" ? "avatar" : window.location.pathname === "/capture" ? "capture" : "settings";
+  const route = getAppRoute();
   const [settings, setSettings] = useState<Settings>(() => readSettings());
   const [reaction, setReaction] = useState<Reaction>("normal");
   const [debug, setDebug] = useState<TrackingDebug>({
@@ -513,21 +891,100 @@ function App() {
   });
   const [audioDebug, setAudioDebug] = useState<AudioDebug>({
     volume: 0,
+    speechLevel: 0,
     mouthShape: "closed",
     status: "音声入力は停止中",
   });
   const [audioError, setAudioError] = useState("");
   const [mouthShape, setMouthShape] = useState<MouthShape>("closed");
   const [manualBlinkSignal, setManualBlinkSignal] = useState(0);
+  const [manualGazeRequest, setManualGazeRequest] = useState({ direction: "lookLeft" as EyeImageSlot, signal: 0 });
+  const [gazeDebug, setGazeDebug] = useState<GazeDebug>({
+    direction: "center",
+    status: "待機中",
+    canGaze: false,
+    hasLeft: false,
+    hasRight: false,
+    cropValid: false,
+  });
+  const [avatarVisualState, setAvatarVisualState] = useState<AvatarVisualState>({
+    isBlinking: false,
+    eyeDirection: "center",
+    reactionStartedAt: performance.now(),
+  });
+  const [audioCalibrationSignal, setAudioCalibrationSignal] = useState(0);
+  const [cameraFollow, setCameraFollow] = useState<CameraFollow>({ x: 0, y: 0, visible: false });
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [cameraError, setCameraError] = useState("");
   const manualMouthTimeoutRef = useRef<number | undefined>(undefined);
+  const avatarSettingsUpdatedAtRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const initialStoredSettingsRef = useRef<StoredSettings>(toStoredSettings(settings));
+  const sharedStoredSettingsUpdatedAtRef = useRef(0);
+  const [sharedSettingsReady, setSharedSettingsReady] = useState(false);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
     setSettings((current) => ({ ...current, ...patch }));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void readSharedStoredSettingsPayload()
+      .then((payload) => {
+        if (cancelled) return;
+        const sharedSettings = payload?.settings;
+        if (sharedSettings) {
+          sharedStoredSettingsUpdatedAtRef.current = payload.updatedAt ?? Date.now();
+          updateSettings(sharedSettings);
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...initialStoredSettingsRef.current, ...sharedSettings }));
+          } catch {
+            // Shared settings still loaded, so local cache failure is not fatal.
+          }
+        } else if (route === "settings") {
+          void saveSharedStoredSettings(initialStoredSettingsRef.current);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSharedSettingsReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [route, updateSettings]);
+
+  useEffect(() => {
+    if (route === "settings") return;
+    let cancelled = false;
+
+    const syncSharedSettings = () => {
+      void readSharedStoredSettingsPayload()
+        .then(async (payload) => {
+          if (cancelled || !payload?.settings) return;
+          const nextUpdatedAt = payload.updatedAt ?? 1;
+          if (nextUpdatedAt <= sharedStoredSettingsUpdatedAtRef.current) return;
+          sharedStoredSettingsUpdatedAtRef.current = nextUpdatedAt;
+          const imageSettings = await loadStoredImageSettings().catch(() => undefined);
+          if (!cancelled) {
+            updateSettings({
+              ...payload.settings,
+              ...(imageSettings ?? {}),
+            });
+          }
+        })
+        .catch(() => undefined);
+    };
+
+    syncSharedSettings();
+    const interval = window.setInterval(syncSharedSettings, 700);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [route, updateSettings]);
 
   useEffect(() => {
     try {
@@ -535,13 +992,16 @@ function App() {
     } catch {
       setCameraError("設定の保存に失敗しました。ブラウザの保存容量を確認してください。");
     }
-  }, [settings]);
+    if (route === "settings" && sharedSettingsReady) {
+      void saveSharedStoredSettings(toStoredSettings(settings));
+    }
+  }, [route, settings, sharedSettingsReady]);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([loadReactionImages(), loadBackgroundImage(), loadNormalBlinkImage(), loadMouthImages()])
-      .then(([images, backgroundImage, normalBlinkImage, mouthImages]) => {
-        if (!cancelled) updateSettings({ images, backgroundImage, normalBlinkImage, mouthImages });
+    void loadStoredImageSettings()
+      .then((imageSettings) => {
+        if (!cancelled) updateSettings(imageSettings);
       })
       .catch(() => {
         if (!cancelled) setCameraError("保存済み画像の読み込みに失敗しました。");
@@ -565,13 +1025,17 @@ function App() {
 
   useEffect(() => {
     if (route === "avatar") return;
-    void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume, settings).catch(() => undefined);
+    void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume, cameraFollow, settings).catch(
+      () => undefined,
+    );
   }, [reaction, route, settings]);
 
   useEffect(() => {
     if (route === "avatar") return;
-    void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume).catch(() => undefined);
-  }, [mouthShape, reaction, route]);
+    void publishSharedState(reaction, reaction === "normal" ? mouthShape : "closed", audioDebug.volume, cameraFollow).catch(
+      () => undefined,
+    );
+  }, [cameraFollow, mouthShape, reaction, route]);
 
   useEffect(() => {
     if (route !== "avatar") return;
@@ -590,7 +1054,18 @@ function App() {
           mouthShape: payload.mouthShape ?? "closed",
           status: "入力側から同期中",
         }));
-        if (payload.settings) updateSettings(payload.settings);
+        setCameraFollow(payload.cameraFollow ?? { x: 0, y: 0, visible: false });
+        if (payload.settings) {
+          avatarSettingsUpdatedAtRef.current = payload.settingsUpdatedAt ?? payload.updatedAt;
+          updateSettings(payload.settings);
+        } else if (payload.settingsUpdatedAt && payload.settingsUpdatedAt > avatarSettingsUpdatedAtRef.current) {
+          avatarSettingsUpdatedAtRef.current = payload.settingsUpdatedAt;
+          void readSharedReaction()
+            .then((fullPayload) => {
+              if (!cancelled && fullPayload?.settings) updateSettings(fullPayload.settings);
+            })
+            .catch(() => undefined);
+        }
       }
     };
 
@@ -620,6 +1095,9 @@ function App() {
       try {
         const payload = JSON.parse(event.data) as SharedReactionPayload;
         if (!payload.reaction || !reactions.some((item) => item.key === payload.reaction)) return;
+        if (!isCameraFollow(payload.cameraFollow)) {
+          payload.cameraFollow = { x: 0, y: 0, visible: false };
+        }
         applyPayload(payload);
       } catch {
         startFallbackPolling();
@@ -645,10 +1123,12 @@ function App() {
     onDebug: setDebug,
     onDevices: setDevices,
     onError: setCameraError,
+    onCameraFollow: setCameraFollow,
   });
 
   useLipSyncAudio({
     enabled: route !== "avatar" && settings.lipSyncEnabled && settings.audioInputEnabled,
+    calibrationSignal: audioCalibrationSignal,
     deviceId: settings.selectedAudioDeviceId,
     threshold: settings.mouthThreshold,
     onDebug: setAudioDebug,
@@ -670,27 +1150,45 @@ function App() {
     }, 420);
   }, []);
 
+  const handleManualGaze = useCallback((direction: EyeImageSlot) => {
+    setManualGazeRequest((current) => ({ direction, signal: current.signal + 1 }));
+  }, []);
+
+  const isElectronRecord = route === "record" && navigator.userAgent.includes("Electron");
+
   return (
-    <main className={`app ${route}`}>
+    <main className={`app ${route}${isElectronRecord ? " electronRecord" : ""}`}>
+      {isElectronRecord && <div className="electronDragBar" aria-hidden="true" />}
       <AvatarStage
+        manualGazeRequest={manualGazeRequest}
         manualBlinkSignal={manualBlinkSignal}
         mouthShape={mouthShape}
+        onGazeDebug={setGazeDebug}
         reaction={reaction}
         route={route}
         settings={settings}
+        audioLevel={audioDebug.volume}
+        cameraFollow={cameraFollow}
+        onVisualState={setAvatarVisualState}
       />
       <video ref={videoRef} className="trackingVideo" muted playsInline />
+
+      {route === "canvas" && <CanvasRecordPanel settings={settings} reaction={reaction} mouthShape={mouthShape} visualState={avatarVisualState} />}
 
       {route === "settings" && (
         <SettingsPanel
           audioDebug={audioDebug}
           audioDevices={audioDevices}
           audioError={audioError}
+          cameraFollow={cameraFollow}
           cameraError={cameraError}
           debug={debug}
           devices={devices}
+          gazeDebug={gazeDebug}
           onChange={updateSettings}
+          onCalibrateAudio={() => setAudioCalibrationSignal((value) => value + 1)}
           onManualBlink={() => setManualBlinkSignal((value) => value + 1)}
+          onManualGaze={handleManualGaze}
           onManualMouth={handleManualMouth}
           onManualReaction={setReaction}
           reaction={reaction}
@@ -710,6 +1208,7 @@ type TrackingArgs = {
   onDebug: (debug: TrackingDebug) => void;
   onDevices: (devices: MediaDeviceInfo[]) => void;
   onError: (message: string) => void;
+  onCameraFollow: (follow: CameraFollow) => void;
 };
 
 function usePoseTracking({
@@ -721,6 +1220,7 @@ function usePoseTracking({
   onDebug,
   onDevices,
   onError,
+  onCameraFollow,
 }: TrackingArgs) {
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
@@ -741,6 +1241,7 @@ function usePoseTracking({
 
       if (!enabled) {
         onDebug({ candidate: "normal", stableForMs: 0, confidence: 0, status: "停止中" });
+        onCameraFollow({ x: 0, y: 0, visible: false });
         return;
       }
 
@@ -820,6 +1321,9 @@ function usePoseTracking({
           const handResult = handLandmarker.detectForVideo(video, now);
           if (result.landmarks[0]) {
             lastSeenRef.current = now;
+            onCameraFollow(getCameraFollowFromLandmarks(result.landmarks[0], sensitivity));
+          } else {
+            onCameraFollow({ x: 0, y: 0, visible: false });
           }
           const next = classifyPose(result, handResult, sensitivity, lastSeenRef.current);
           const debug = applyStateMachine(next, sensitivity, {
@@ -847,7 +1351,7 @@ function usePoseTracking({
       cancelled = true;
       stopCamera(streamRef, animationRef);
     };
-  }, [deviceId, enabled, onDebug, onDevices, onError, onReaction, sensitivity, videoRef]);
+  }, [deviceId, enabled, onCameraFollow, onDebug, onDevices, onError, onReaction, sensitivity, videoRef]);
 }
 
 function stopCamera(
@@ -859,8 +1363,34 @@ function stopCamera(
   streamRef.current = null;
 }
 
+function getCameraFollowFromLandmarks(landmarks: NormalizedLandmark[], sensitivity: Sensitivity): CameraFollow {
+  const profile = sensitivityProfile[sensitivity];
+  const nose = landmarks[0];
+  const leftShoulder = landmarks[11];
+  const rightShoulder = landmarks[12];
+  if (!visible(nose, profile) || !visible(leftShoulder, profile) || !visible(rightShoulder, profile)) {
+    return { x: 0, y: 0, visible: false };
+  }
+
+  const shoulderCenter = midpoint(leftShoulder, rightShoulder);
+  const subjectX = nose.x * 0.72 + shoulderCenter.x * 0.28;
+  const subjectY = nose.y * 0.72 + shoulderCenter.y * 0.28;
+  return {
+    x: normalizeCameraOffset(subjectX - 0.5, 0.035, 0.22),
+    y: normalizeCameraOffset(subjectY - 0.45, 0.055, 0.28),
+    visible: true,
+  };
+}
+
+function normalizeCameraOffset(offset: number, deadZone: number, fullScale: number) {
+  const abs = Math.abs(offset);
+  if (abs <= deadZone) return 0;
+  return clamp((Math.sign(offset) * (abs - deadZone)) / (fullScale - deadZone), -1, 1);
+}
+
 type LipSyncAudioArgs = {
   enabled: boolean;
+  calibrationSignal: number;
   deviceId: string;
   threshold: number;
   onMouthShape: (mouthShape: MouthShape) => void;
@@ -868,15 +1398,31 @@ type LipSyncAudioArgs = {
   onError: (message: string) => void;
 };
 
-function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, onError }: LipSyncAudioArgs) {
+function useLipSyncAudio({
+  enabled,
+  calibrationSignal,
+  deviceId,
+  threshold,
+  onMouthShape,
+  onDebug,
+  onError,
+}: LipSyncAudioArgs) {
   const animationRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const smoothedLevelRef = useRef(0);
+  const noiseFloorRef = useRef(0);
+  const calibrationStartedRef = useRef(0);
+  const calibrationSumRef = useRef(0);
+  const calibrationCountRef = useRef(0);
   const mouthShapeRef = useRef<MouthShape>("closed");
+  const speakingRef = useRef(false);
+  const speechStartRef = useRef(0);
+  const quietStartRef = useRef(0);
   const lastSwitchRef = useRef(0);
-  const lastVoiceRef = useRef(0);
+  const nextRhythmAtRef = useRef(0);
+  const rhythmStepRef = useRef(0);
   const lastDebugRef = useRef(0);
 
   useEffect(() => {
@@ -886,11 +1432,20 @@ function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, 
       stopAudio(streamRef, animationRef, audioContextRef);
       onError("");
       smoothedLevelRef.current = 0;
+      noiseFloorRef.current = 0;
+      calibrationStartedRef.current = 0;
+      calibrationSumRef.current = 0;
+      calibrationCountRef.current = 0;
       mouthShapeRef.current = "closed";
+      speakingRef.current = false;
+      speechStartRef.current = 0;
+      quietStartRef.current = 0;
+      nextRhythmAtRef.current = 0;
+      rhythmStepRef.current = 0;
       onMouthShape("closed");
 
       if (!enabled) {
-        onDebug({ volume: 0, mouthShape: "closed", status: "音声入力は停止中" });
+        onDebug({ volume: 0, speechLevel: 0, mouthShape: "closed", status: "音声入力は停止中" });
         return;
       }
 
@@ -919,7 +1474,6 @@ function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, 
         audioContextRef.current = audioContext;
         analyserRef.current = analyser;
         lastSwitchRef.current = performance.now();
-        lastVoiceRef.current = 0;
 
         const data = new Uint8Array(analyser.fftSize);
         const tick = () => {
@@ -931,29 +1485,97 @@ function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, 
           }
 
           const rms = Math.sqrt(sum / data.length);
-          const rawLevel = clamp(rms * 520, 0, 100);
-          const smoothedLevel = smoothedLevelRef.current * 0.68 + rawLevel * 0.32;
+          const rawLevel = clamp(rms * 1800, 0, 100);
+          const previousLevel = smoothedLevelRef.current;
+          const smoothing = rawLevel > previousLevel ? 0.34 : 0.16;
+          const smoothedLevel = previousLevel * (1 - smoothing) + rawLevel * smoothing;
           smoothedLevelRef.current = smoothedLevel;
 
           const now = performance.now();
-          const quietThreshold = threshold * 0.62;
-          const smallThreshold = threshold;
-          const wideThreshold = threshold * 1.85;
-          if (smoothedLevel >= smallThreshold) {
-            lastVoiceRef.current = now;
+          const effectiveThreshold = clamp(threshold, 1, 100);
+          const startDelta = getLipSyncStartDelta(effectiveThreshold);
+          const stopDelta = Math.max(1.6, startDelta * 0.82);
+          if (!calibrationStartedRef.current) {
+            calibrationStartedRef.current = now;
+          }
+          if (now - calibrationStartedRef.current < LIP_SYNC_CALIBRATION_MS) {
+            if (now - calibrationStartedRef.current >= LIP_SYNC_CALIBRATION_WARMUP_MS) {
+              calibrationSumRef.current += smoothedLevel;
+              calibrationCountRef.current += 1;
+              noiseFloorRef.current = calibrationSumRef.current / Math.max(1, calibrationCountRef.current);
+            } else {
+              noiseFloorRef.current = smoothedLevel;
+            }
+            if (mouthShapeRef.current !== "closed") {
+              mouthShapeRef.current = "closed";
+              onMouthShape("closed");
+            }
+            if (now - lastDebugRef.current > 120) {
+              lastDebugRef.current = now;
+              onDebug({
+                volume: smoothedLevel,
+                speechLevel: 0,
+                mouthShape: "closed",
+                status: "環境音を測定中",
+              });
+            }
+            animationRef.current = requestAnimationFrame(tick);
+            return;
           }
 
-          let nextShape: MouthShape = mouthShapeRef.current;
-          if (smoothedLevel >= wideThreshold) {
-            nextShape = "wideOpen";
-          } else if (smoothedLevel >= smallThreshold || now - lastVoiceRef.current < 150) {
-            nextShape = "smallOpen";
-          } else if (smoothedLevel < quietThreshold) {
+          if (!noiseFloorRef.current) {
+            noiseFloorRef.current = smoothedLevel;
+          }
+          const previousNoiseFloor = noiseFloorRef.current;
+          if (!speakingRef.current && smoothedLevel < previousNoiseFloor + startDelta * 0.35) {
+            const noiseSmoothing = smoothedLevel < previousNoiseFloor ? 0.08 : 0.004;
+            noiseFloorRef.current = previousNoiseFloor * (1 - noiseSmoothing) + smoothedLevel * noiseSmoothing;
+          } else if (smoothedLevel < previousNoiseFloor) {
+            noiseFloorRef.current = previousNoiseFloor * 0.9 + smoothedLevel * 0.1;
+          }
+          const noiseFloor = noiseFloorRef.current;
+          const speechLevel = Math.max(0, smoothedLevel - noiseFloor);
+
+          if (!speakingRef.current) {
+            if (speechLevel >= startDelta) {
+              if (!speechStartRef.current) {
+                speechStartRef.current = now;
+              }
+              if (now - speechStartRef.current >= LIP_SYNC_START_HOLD_MS) {
+                speakingRef.current = true;
+                quietStartRef.current = 0;
+                nextRhythmAtRef.current = 0;
+              }
+            } else {
+              speechStartRef.current = 0;
+              quietStartRef.current = 0;
+            }
+          } else if (speechLevel < stopDelta) {
+            if (!quietStartRef.current) {
+              quietStartRef.current = now;
+            }
+            if (now - quietStartRef.current >= LIP_SYNC_END_HOLD_MS) {
+              speakingRef.current = false;
+              speechStartRef.current = 0;
+              quietStartRef.current = 0;
+              nextRhythmAtRef.current = 0;
+            }
+          } else {
+            quietStartRef.current = 0;
+          }
+
+          const intensity = getSpeechIntensity(speechLevel, startDelta);
+          let nextShape = mouthShapeRef.current;
+          if (speakingRef.current) {
+            if (now >= nextRhythmAtRef.current && now - lastSwitchRef.current >= LIP_SYNC_MIN_SHAPE_HOLD_MS) {
+              nextShape = getNextRhythmMouthShape(mouthShapeRef.current, intensity, rhythmStepRef);
+              nextRhythmAtRef.current = now + getLipSyncRhythmMs(intensity);
+            }
+          } else if (mouthShapeRef.current !== "closed" && now - lastSwitchRef.current >= LIP_SYNC_MIN_SHAPE_HOLD_MS) {
             nextShape = "closed";
           }
 
-          const minHoldMs = nextShape === "closed" ? 115 : 85;
-          const shapeChanged = nextShape !== mouthShapeRef.current && now - lastSwitchRef.current >= minHoldMs;
+          const shapeChanged = nextShape !== mouthShapeRef.current;
           if (shapeChanged) {
             mouthShapeRef.current = nextShape;
             lastSwitchRef.current = now;
@@ -964,8 +1586,16 @@ function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, 
             lastDebugRef.current = now;
             onDebug({
               volume: smoothedLevel,
+              speechLevel,
               mouthShape: mouthShapeRef.current,
-              status: audioContext.state === "running" ? "音声入力中" : `音声入力 ${audioContext.state}`,
+              status:
+                audioContext.state !== "running"
+                  ? `音声入力 ${audioContext.state}`
+                  : speakingRef.current
+                    ? `発話中 ${getSpeechIntensityLabel(intensity)}`
+                    : quietStartRef.current
+                      ? "発話終了待ち"
+                      : "待機中",
             });
           }
           animationRef.current = requestAnimationFrame(tick);
@@ -975,7 +1605,7 @@ function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, 
       } catch (error) {
         const message = error instanceof Error ? error.message : "音声入力を開始できませんでした。";
         onError(message);
-        onDebug({ volume: 0, mouthShape: "closed", status: "音声入力エラー" });
+        onDebug({ volume: 0, speechLevel: 0, mouthShape: "closed", status: "音声入力エラー" });
         onMouthShape("closed");
       }
     }
@@ -986,7 +1616,7 @@ function useLipSyncAudio({ enabled, deviceId, threshold, onMouthShape, onDebug, 
       cancelled = true;
       stopAudio(streamRef, animationRef, audioContextRef);
     };
-  }, [deviceId, enabled, onDebug, onError, onMouthShape, threshold]);
+  }, [calibrationSignal, deviceId, enabled, onDebug, onError, onMouthShape, threshold]);
 }
 
 function stopAudio(
@@ -999,6 +1629,49 @@ function stopAudio(
   streamRef.current = null;
   void audioContextRef.current?.close().catch(() => undefined);
   audioContextRef.current = null;
+}
+
+function getSpeechIntensity(level: number, threshold: number): SpeechIntensity {
+  if (level >= threshold * 1.9) return "strong";
+  if (level >= threshold * 1.18) return "medium";
+  return "soft";
+}
+
+function getLipSyncStartDelta(threshold: number) {
+  return Math.max(LIP_SYNC_NOISE_MARGIN_MIN, 1.4 + threshold * LIP_SYNC_NOISE_MARGIN_RATIO);
+}
+
+function getSpeechIntensityLabel(intensity: SpeechIntensity) {
+  if (intensity === "strong") return "強";
+  if (intensity === "medium") return "中";
+  return "弱";
+}
+
+function getLipSyncRhythmMs(intensity: SpeechIntensity) {
+  if (intensity === "strong") return randomBetween(105, 145);
+  if (intensity === "medium") return randomBetween(120, 165);
+  return randomBetween(135, 180);
+}
+
+function getNextRhythmMouthShape(
+  current: MouthShape,
+  intensity: SpeechIntensity,
+  rhythmStepRef: React.MutableRefObject<number>,
+): MouthShape {
+  const patterns: Record<SpeechIntensity, MouthShape[]> = {
+    soft: ["smallOpen", "closed", "smallOpen", "closed", "smallOpen"],
+    medium: ["smallOpen", "closed", "wideOpen", "smallOpen", "closed"],
+    strong: ["wideOpen", "smallOpen", "wideOpen", "closed", "smallOpen", "wideOpen"],
+  };
+  const pattern = patterns[intensity];
+
+  for (let attempts = 0; attempts < pattern.length; attempts += 1) {
+    const next = pattern[rhythmStepRef.current % pattern.length];
+    rhythmStepRef.current += 1;
+    if (next !== current) return next;
+  }
+
+  return current === "closed" ? "smallOpen" : "closed";
 }
 
 function classifyPose(
@@ -1202,6 +1875,401 @@ function getFrameBackground(settings: Settings) {
   return settings.backgroundColor;
 }
 
+function getRecordingSize(aspectRatio: CanvasAspectRatio) {
+  return aspectRatio === "16:9" ? { width: 1920, height: 1080 } : { width: 1080, height: 1920 };
+}
+
+function getRecordingFilename() {
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "")
+    .replace("T", "-");
+  return `reaction-standee-${stamp}.webm`;
+}
+
+function getRecordingFrameMetrics(canvas: HTMLCanvasElement): RecordingFrameMetrics {
+  const frame = document.querySelector<HTMLElement>(".recordingFrame");
+  const rect = frame?.getBoundingClientRect();
+  if (!rect?.width || !rect.height) {
+    return {
+      scaleX: 1,
+      scaleY: 1,
+      avatarTransform: identityRecordingTransform(),
+      lifeTransform: identityRecordingTransform(),
+      talkTransform: identityRecordingTransform(),
+    };
+  }
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    scaleX,
+    scaleY,
+    avatarTransform: readElementTransform(".avatar", scaleX, scaleY),
+    lifeTransform: readElementTransform(".avatarLifeLayer", scaleX, scaleY),
+    talkTransform: readElementTransform(".avatarTalkLayer", scaleX, scaleY),
+  };
+}
+
+function identityRecordingTransform(): RecordingTransform {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+}
+
+function readElementTransform(selector: string, scaleX: number, scaleY: number): RecordingTransform {
+  const element = document.querySelector<HTMLElement>(selector);
+  if (!element) return identityRecordingTransform();
+  const transform = window.getComputedStyle(element).transform;
+  if (!transform || transform === "none") return identityRecordingTransform();
+
+  const matrix = new DOMMatrixReadOnly(transform);
+  return {
+    a: matrix.a,
+    b: matrix.b,
+    c: matrix.c,
+    d: matrix.d,
+    e: matrix.e * scaleX,
+    f: matrix.f * scaleY,
+  };
+}
+
+function applyRecordingTransform(
+  ctx: CanvasRenderingContext2D,
+  transform: RecordingTransform,
+  originX: number,
+  originY: number,
+) {
+  ctx.translate(originX, originY);
+  ctx.transform(transform.a, transform.b, transform.c, transform.d, transform.e, transform.f);
+  ctx.translate(-originX, -originY);
+}
+
+function getSupportedRecordingMimeType() {
+  const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm;codecs=h264,opus", "video/webm"];
+  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+}
+
+type CanvasImageCache = Map<string, Promise<HTMLImageElement>>;
+
+function loadCanvasImage(src: string, cache: CanvasImageCache) {
+  const cached = cache.get(src);
+  if (cached) return cached;
+
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`画像を読み込めませんでした: ${src}`));
+    image.src = src;
+  });
+  cache.set(src, promise);
+  return promise;
+}
+
+function drawCoverImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, width: number, height: number) {
+  const sourceRatio = image.width / image.height;
+  const targetRatio = width / height;
+  let sourceWidth = image.width;
+  let sourceHeight = image.height;
+  let sourceX = 0;
+  let sourceY = 0;
+
+  if (sourceRatio > targetRatio) {
+    sourceWidth = image.height * targetRatio;
+    sourceX = (image.width - sourceWidth) / 2;
+  } else {
+    sourceHeight = image.width / targetRatio;
+    sourceY = (image.height - sourceHeight) / 2;
+  }
+
+  ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
+}
+
+function drawCroppedOverlay(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  crop: CropRect,
+  target: { x: number; y: number; width: number; height: number },
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(
+    target.x + target.width * (crop.x / 100),
+    target.y + target.height * (crop.y / 100),
+    target.width * (crop.width / 100),
+    target.height * (crop.height / 100),
+  );
+  ctx.clip();
+  ctx.drawImage(image, target.x, target.y, target.width, target.height);
+  ctx.restore();
+}
+
+function drawImageWithCanvasOutline(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  target: { x: number; y: number; width: number; height: number },
+  outlineWidth: number,
+  outlineQuality: OutlineQuality,
+) {
+  const width = Math.max(0, outlineWidth);
+  if (width > 0) {
+    const offsets =
+      outlineQuality === "light"
+        ? [
+            [0, width],
+            [width, 0],
+            [0, -width],
+            [-width, 0],
+          ]
+        : [
+            [0, width],
+            [width, 0],
+            [0, -width],
+            [-width, 0],
+            [width, width],
+            [-width, width],
+            [width, -width],
+            [-width, -width],
+          ];
+
+    ctx.save();
+    ctx.filter = "brightness(0) invert(1)";
+    offsets.forEach(([x, y]) => {
+      ctx.drawImage(image, target.x + x, target.y + y, target.width, target.height);
+    });
+    ctx.restore();
+  }
+
+  ctx.drawImage(image, target.x, target.y, target.width, target.height);
+}
+
+function easeOutCubic(value: number) {
+  const t = clamp(value, 0, 1);
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function drawStar(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, alpha: number) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.beginPath();
+  for (let i = 0; i < 8; i += 1) {
+    const radius = i % 2 === 0 ? size : size * 0.34;
+    const angle = -Math.PI / 2 + (Math.PI * 2 * i) / 8;
+    const px = Math.cos(angle) * radius;
+    const py = Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "#ffe066";
+  ctx.shadowColor = "rgba(255, 224, 102, 0.85)";
+  ctx.shadowBlur = size * 0.7;
+  ctx.fill();
+  ctx.restore();
+}
+
+function strokeRoundedLine(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  length: number,
+  angle: number,
+  width: number,
+  color: string,
+  alpha: number,
+) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.lineCap = "round";
+  ctx.lineWidth = width;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(-length / 2, 0);
+  ctx.lineTo(length / 2, 0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+async function drawRecordingReactionEffects(
+  ctx: CanvasRenderingContext2D,
+  reaction: Reaction,
+  imageCache: CanvasImageCache,
+  target: { x: number; y: number; width: number; height: number },
+  elapsedMs: number,
+) {
+  if (reaction === "normal") return;
+
+  const progress = clamp(elapsedMs / 820, 0, 1);
+  const alpha = Math.max(0, 1 - progress * 0.92);
+  const effectX = target.x - target.width * 0.14;
+  const effectY = target.y - target.height * 0.12;
+  const effectWidth = target.width * 1.28;
+  const effectHeight = target.height * 1.24;
+
+  if (reaction === "joy") {
+    try {
+      const asset = await loadCanvasImage("/effects/joy-sparkle-field.svg", imageCache);
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, alpha + 0.08);
+      ctx.drawImage(asset, effectX, effectY, effectWidth, effectHeight);
+      ctx.restore();
+    } catch {
+      // SVG素材が読めない場合も、手描きの星だけで続行します。
+    }
+    const pop = 0.72 + easeOutCubic(progress) * 0.35;
+    drawStar(ctx, effectX + effectWidth * 0.23, effectY + effectHeight * 0.24, effectWidth * 0.035 * pop, alpha);
+    drawStar(ctx, effectX + effectWidth * 0.77, effectY + effectHeight * 0.22, effectWidth * 0.034 * pop, alpha * 0.9);
+    return;
+  }
+
+  if (reaction === "surprised") {
+    try {
+      const asset = await loadCanvasImage("/effects/surprised-shockwave.svg", imageCache);
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, alpha + 0.12);
+      ctx.drawImage(asset, effectX, effectY, effectWidth, effectHeight);
+      ctx.restore();
+    } catch {
+      // フォールバックのリングを下で描きます。
+    }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.lineWidth = target.width * 0.018;
+    ctx.beginPath();
+    ctx.arc(target.x + target.width * 0.5, target.y + target.height * 0.48, target.width * (0.2 + progress * 0.36), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  if (reaction === "troubled") {
+    const lineAlpha = Math.max(0, 1 - clamp(elapsedMs / 980, 0, 1) * 0.82);
+    strokeRoundedLine(ctx, effectX + effectWidth * 0.18, effectY + effectHeight * 0.28, effectWidth * 0.18, -0.35, 8, "#dbeafe", lineAlpha);
+    strokeRoundedLine(ctx, effectX + effectWidth * 0.82, effectY + effectHeight * 0.68, effectWidth * 0.17, 0.28, 7, "#dbeafe", lineAlpha * 0.86);
+    strokeRoundedLine(ctx, effectX + effectWidth * 0.28, effectY + effectHeight * 0.78, effectWidth * 0.13, 0.18, 6, "#dbeafe", lineAlpha * 0.74);
+    return;
+  }
+
+  if (reaction === "explain") {
+    try {
+      const asset = await loadCanvasImage("/effects/explain-pointer-light.svg", imageCache);
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, alpha + 0.16);
+      ctx.drawImage(asset, effectX - effectWidth * 0.04, effectY + effectHeight * 0.04, effectWidth, effectHeight);
+      ctx.restore();
+    } catch {
+      // フォールバックのビームを下で描きます。
+    }
+    strokeRoundedLine(ctx, effectX + effectWidth * 0.25, effectY + effectHeight * 0.4, effectWidth * 0.32, -0.2, 11, "#bae6fd", alpha);
+  }
+}
+
+async function drawRecordingFrame(
+  ctx: CanvasRenderingContext2D,
+  settings: Settings,
+  reaction: Reaction,
+  mouthShape: MouthShape,
+  visualState: AvatarVisualState,
+  imageCache: CanvasImageCache,
+  metrics: RecordingFrameMetrics,
+) {
+  const { width, height } = ctx.canvas;
+  ctx.clearRect(0, 0, width, height);
+
+  if (settings.backgroundMode === "green") {
+    ctx.fillStyle = "#00ff00";
+    ctx.fillRect(0, 0, width, height);
+  } else if (settings.backgroundMode === "color") {
+    ctx.fillStyle = settings.backgroundColor;
+    ctx.fillRect(0, 0, width, height);
+  } else if (settings.backgroundMode === "image" && settings.backgroundImage) {
+    try {
+      drawCoverImage(ctx, await loadCanvasImage(settings.backgroundImage, imageCache), width, height);
+    } catch {
+      ctx.fillStyle = settings.backgroundColor;
+      ctx.fillRect(0, 0, width, height);
+    }
+  }
+
+  const primarySrc = settings.images[reaction] ?? `/reactions/${reaction}.png`;
+  let primaryImage: HTMLImageElement;
+  try {
+    primaryImage = await loadCanvasImage(primarySrc, imageCache);
+  } catch {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.82)";
+    ctx.font = "48px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`${reaction}.png`, width / 2, height / 2);
+    return;
+  }
+
+  const avatarWidth = settings.avatarSize * metrics.scaleX;
+  const avatarHeight = avatarWidth * (primaryImage.height / primaryImage.width);
+  const avatarX = width / 2 + settings.avatarX * metrics.scaleX - avatarWidth / 2;
+  const avatarY = height / 2 + settings.avatarY * metrics.scaleY - avatarHeight / 2;
+
+  ctx.save();
+  applyRecordingTransform(ctx, metrics.avatarTransform, avatarX + avatarWidth * 0.5, avatarY + avatarHeight * 0.86);
+  applyRecordingTransform(ctx, metrics.lifeTransform, avatarX + avatarWidth * 0.5, avatarY + avatarHeight * 0.82);
+  applyRecordingTransform(ctx, metrics.talkTransform, avatarX + avatarWidth * 0.5, avatarY + avatarHeight * 0.86);
+
+  drawImageWithCanvasOutline(
+    ctx,
+    primaryImage,
+    { x: avatarX, y: avatarY, width: avatarWidth, height: avatarHeight },
+    settings.outlineEnabled ? settings.outlineWidth * metrics.scaleX : 0,
+    settings.outlineQuality ?? "standard",
+  );
+
+  if (reaction === "normal" && isValidBlinkCrop(settings.blinkCrop)) {
+    const eyeOverlaySrc =
+      visualState.isBlinking && settings.blinkEnabled
+        ? settings.normalBlinkImage
+        : settings.gazeEnabled
+          ? getEyeOverlaySrc(visualState.eyeDirection, settings.eyeImages)
+          : undefined;
+
+    if (eyeOverlaySrc) {
+      try {
+        const eyeOverlayImage = await loadCanvasImage(eyeOverlaySrc, imageCache);
+        drawCroppedOverlay(ctx, eyeOverlayImage, settings.blinkCrop, {
+          x: avatarX,
+          y: avatarY,
+          width: avatarWidth,
+          height: avatarHeight,
+        });
+      } catch {
+        // 未登録または壊れた目元差分は録画を止めずにスキップします。
+      }
+    }
+  }
+
+  if (reaction === "normal" && settings.lipSyncEnabled && mouthShape !== "closed" && isValidMouthCrop(settings.mouthCrop)) {
+    const mouthOverlaySrc = getMouthOverlaySrc(mouthShape, settings.mouthImages);
+    if (mouthOverlaySrc) {
+      try {
+        const mouthOverlayImage = await loadCanvasImage(mouthOverlaySrc, imageCache);
+        drawCroppedOverlay(ctx, mouthOverlayImage, settings.mouthCrop, {
+          x: avatarX,
+          y: avatarY,
+          width: avatarWidth,
+          height: avatarHeight,
+        });
+      } catch {
+        // 未登録または壊れた差分は録画を止めずにスキップします。
+      }
+    }
+  }
+
+  await drawRecordingReactionEffects(ctx, reaction, imageCache, { x: avatarX, y: avatarY, width: avatarWidth, height: avatarHeight }, performance.now() - visualState.reactionStartedAt);
+
+  ctx.restore();
+}
+
 function randomBetween(min: number, max: number) {
   return Math.round(min + Math.random() * (max - min));
 }
@@ -1325,33 +2393,455 @@ function getMouthOverlaySrc(mouthShape: MouthShape, mouthImages: MouthImages) {
   return mouthImages.smallOpen ?? mouthImages.wideOpen;
 }
 
+function getEyeOverlaySrc(direction: EyeDirection, eyeImages: EyeImages) {
+  if (direction === "center") return undefined;
+  return eyeImages[direction];
+}
+
 function getMouthShapeLabel(mouthShape: MouthShape) {
   if (mouthShape === "smallOpen") return "小開き";
   if (mouthShape === "wideOpen") return "大開き";
   return "通常口";
 }
 
+function getEyeDirectionLabel(direction: EyeDirection) {
+  if (direction === "lookLeft") return "左";
+  if (direction === "lookRight") return "右";
+  return "中央";
+}
+
+function getCameraFollowStatus(settings: Settings, cameraFollow: CameraFollow) {
+  if (!settings.lifeEnabled) return "生命感OFF";
+  if (!settings.cameraFollowEnabled) return "追従OFF";
+  if (!settings.trackingEnabled) return "トラッキングOFF";
+  return cameraFollow.visible ? "検出中" : "未検出";
+}
+
 function isMouthShape(value: unknown): value is MouthShape {
   return value === "closed" || value === "smallOpen" || value === "wideOpen";
 }
 
+function isCameraFollow(value: unknown): value is CameraFollow {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<CameraFollow>;
+  return typeof item.x === "number" && typeof item.y === "number" && typeof item.visible === "boolean";
+}
+
+function getGazeStatus(reaction: Reaction, settings: Settings, direction: EyeDirection) {
+  if (reaction !== "normal") return "通常表示ではありません";
+  if (!settings.lifeEnabled) return "生命感がOFF";
+  if (!settings.gazeEnabled) return "目線差分がOFF";
+  if (!isValidBlinkCrop(settings.blinkCrop)) return "目元範囲が無効";
+  if (!settings.eyeImages.lookLeft && !settings.eyeImages.lookRight) return "目線差分画像が未登録";
+  if (direction === "lookLeft") return "目線左を表示中";
+  if (direction === "lookRight") return "目線右を表示中";
+  return "自動目線待機中";
+}
+
+function getGazeDebug(reaction: Reaction, settings: Settings, direction: EyeDirection): GazeDebug {
+  const cropValid = isValidBlinkCrop(settings.blinkCrop);
+  const hasLeft = Boolean(settings.eyeImages.lookLeft);
+  const hasRight = Boolean(settings.eyeImages.lookRight);
+  return {
+    direction,
+    status: getGazeStatus(reaction, settings, direction),
+    canGaze:
+      reaction === "normal" &&
+      settings.lifeEnabled &&
+      settings.gazeEnabled &&
+      cropValid &&
+      (hasLeft || hasRight),
+    hasLeft,
+    hasRight,
+    cropValid,
+  };
+}
+
+function useIdleGaze(
+  reaction: Reaction,
+  settings: Settings,
+  manualGazeRequest: { direction: EyeImageSlot; signal: number },
+  cameraFollow: CameraFollow,
+): EyeDirection {
+  const [direction, setDirection] = useState<EyeDirection>("center");
+  const canGaze =
+    reaction === "normal" &&
+    settings.lifeEnabled &&
+    settings.gazeEnabled &&
+    (Boolean(settings.eyeImages.lookLeft) || Boolean(settings.eyeImages.lookRight));
+
+  useEffect(() => {
+    if (!canGaze) {
+      setDirection("center");
+      return;
+    }
+
+    let timeout = 0;
+    let cancelled = false;
+    const available: EyeImageSlot[] = [];
+    if (settings.eyeImages.lookLeft) available.push("lookLeft");
+    if (settings.eyeImages.lookRight) available.push("lookRight");
+
+    const schedule = () => {
+      timeout = window.setTimeout(() => {
+        if (cancelled || !available.length) return;
+        const next = available[randomBetween(0, available.length - 1)];
+        setDirection(next);
+        timeout = window.setTimeout(() => {
+          if (cancelled) return;
+          setDirection("center");
+          schedule();
+        }, randomBetween(650, 1800));
+      }, randomBetween(4500, 11000));
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [canGaze, settings.eyeImages.lookLeft, settings.eyeImages.lookRight]);
+
+  useEffect(() => {
+    if (!manualGazeRequest.signal || !canGaze || !settings.eyeImages[manualGazeRequest.direction]) return;
+    setDirection(manualGazeRequest.direction);
+    const timeout = window.setTimeout(() => setDirection("center"), 1600);
+    return () => window.clearTimeout(timeout);
+  }, [canGaze, manualGazeRequest.direction, manualGazeRequest.signal, settings.eyeImages]);
+
+  useEffect(() => {
+    if (!canGaze || !settings.cameraFollowEnabled || !cameraFollow.visible) return;
+    let timeout = 0;
+    if (cameraFollow.x < -0.28 && settings.eyeImages.lookLeft) {
+      setDirection("lookLeft");
+      timeout = window.setTimeout(() => setDirection("center"), 900);
+    } else if (cameraFollow.x > 0.28 && settings.eyeImages.lookRight) {
+      setDirection("lookRight");
+      timeout = window.setTimeout(() => setDirection("center"), 900);
+    }
+    return () => window.clearTimeout(timeout);
+  }, [
+    cameraFollow.visible,
+    cameraFollow.x,
+    canGaze,
+    settings.cameraFollowEnabled,
+    settings.eyeImages.lookLeft,
+    settings.eyeImages.lookRight,
+  ]);
+
+  return direction;
+}
+
+function useLifeV2Motion(
+  reaction: Reaction,
+  settings: Settings,
+  mouthShape: MouthShape,
+  audioLevel: number,
+  cameraFollow: CameraFollow,
+): React.CSSProperties {
+  const [idleNudge, setIdleNudge] = useState({ x: 0, y: 0, rotate: 0 });
+  const enabled = reaction === "normal" && settings.lifeEnabled;
+
+  useEffect(() => {
+    if (!enabled || !settings.idleMotionEnabled) {
+      setIdleNudge({ x: 0, y: 0, rotate: 0 });
+      return;
+    }
+
+    let timeout = 0;
+    let cancelled = false;
+    const schedule = () => {
+      timeout = window.setTimeout(() => {
+        if (cancelled) return;
+        const strength = settings.lifeMotionStrength / 50;
+        setIdleNudge({
+          x: randomBetween(-2, 2) * strength,
+          y: randomBetween(-1, 1) * strength,
+          rotate: randomBetween(-12, 12) * 0.04 * strength,
+        });
+        timeout = window.setTimeout(() => {
+          if (cancelled) return;
+          setIdleNudge({ x: 0, y: 0, rotate: 0 });
+          schedule();
+        }, randomBetween(800, 1600));
+      }, randomBetween(9000, 18000));
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [enabled, settings.idleMotionEnabled, settings.lifeMotionStrength]);
+
+  if (!enabled) {
+    return {};
+  }
+
+  const strength = settings.lifeMotionStrength / 50;
+  const speaking = settings.speechMotionEnabled && mouthShape !== "closed";
+  const mouthBoost = mouthShape === "wideOpen" ? 1 : mouthShape === "smallOpen" ? 0.62 : 0;
+  const audioBoost = clamp(audioLevel / 60, 0, 1);
+  const speechAmount = speaking ? (0.45 + mouthBoost * 0.35 + audioBoost * 0.2) * strength : 0;
+  const followAmount = settings.cameraFollowEnabled && cameraFollow.visible ? settings.cameraFollowStrength / 50 : 0;
+  const followX = clamp(cameraFollow.x, -1, 1) * followAmount;
+  const followY = clamp(cameraFollow.y, -1, 1) * followAmount;
+
+  return {
+    ["--life-v2-x" as string]: `${idleNudge.x + followX * 7}px`,
+    ["--life-v2-y" as string]: `${idleNudge.y + followY * 3}px`,
+    ["--life-v2-rotate" as string]: `${idleNudge.rotate - followX * 1.6}deg`,
+    ["--speech-motion-scale" as string]: 1 + speechAmount * 0.006,
+    ["--speech-motion-y" as string]: `${speechAmount * -2.2}px`,
+    ["--speech-motion-rotate" as string]: `${speechAmount * 0.24}deg`,
+    ["--speech-motion-duration" as string]: `${Math.round(620 - speechAmount * 160)}ms`,
+  } as React.CSSProperties;
+}
+
+function CanvasRecordPanel({
+  settings,
+  reaction,
+  mouthShape,
+  visualState,
+}: {
+  settings: Settings;
+  reaction: Reaction;
+  mouthShape: MouthShape;
+  visualState: AvatarVisualState;
+}) {
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle");
+  const [message, setMessage] = useState("録画を開始すると、表示中のキャラをWebMで保存します。");
+  const [downloadUrl, setDownloadUrl] = useState("");
+  const [filename, setFilename] = useState("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const animationFrameRef = useRef(0);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const imageCacheRef = useRef<CanvasImageCache>(new Map());
+  const recordingActiveRef = useRef(false);
+  const settingsRef = useRef(settings);
+  const reactionRef = useRef(reaction);
+  const mouthShapeRef = useRef(mouthShape);
+  const visualStateRef = useRef(visualState);
+  const downloadUrlRef = useRef("");
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    reactionRef.current = reaction;
+  }, [reaction]);
+
+  useEffect(() => {
+    mouthShapeRef.current = mouthShape;
+  }, [mouthShape]);
+
+  useEffect(() => {
+    visualStateRef.current = visualState;
+  }, [visualState]);
+
+  useEffect(() => {
+    downloadUrlRef.current = downloadUrl;
+  }, [downloadUrl]);
+
+  useEffect(() => {
+    return () => {
+      recordingActiveRef.current = false;
+      window.cancelAnimationFrame(animationFrameRef.current);
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") recorder.stop();
+      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+      if (downloadUrlRef.current) URL.revokeObjectURL(downloadUrlRef.current);
+    };
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    if (!("MediaRecorder" in window)) {
+      setRecordingState("error");
+      setMessage("このブラウザはMediaRecorder録画に対応していません。Chrome/Safariの最新版で試してください。");
+      return;
+    }
+
+    if (!HTMLCanvasElement.prototype.captureStream) {
+      setRecordingState("error");
+      setMessage("このブラウザはCanvas録画に対応していません。Chrome/Safariの最新版で試してください。");
+      return;
+    }
+
+    if (downloadUrlRef.current) {
+      URL.revokeObjectURL(downloadUrlRef.current);
+      setDownloadUrl("");
+      downloadUrlRef.current = "";
+    }
+
+    const size = getRecordingSize(settingsRef.current.canvasAspectRatio);
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setRecordingState("error");
+      setMessage("録画用Canvasを準備できませんでした。");
+      return;
+    }
+
+    chunksRef.current = [];
+    let mediaStream = canvas.captureStream(30);
+    let audioNotice = "";
+    recordingActiveRef.current = true;
+
+    if (settingsRef.current.audioInputEnabled) {
+      try {
+        const audioConstraints: MediaTrackConstraints | boolean = settingsRef.current.selectedAudioDeviceId
+          ? { deviceId: { exact: settingsRef.current.selectedAudioDeviceId } }
+          : true;
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+        audioStreamRef.current = audioStream;
+        audioStream.getAudioTracks().forEach((track) => mediaStream.addTrack(track));
+      } catch {
+        audioNotice = " マイク音声は取得できなかったため、映像のみで録画します。";
+      }
+    }
+
+    const drawLoop = () => {
+      if (!recordingActiveRef.current) return;
+      void drawRecordingFrame(
+        context,
+        settingsRef.current,
+        reactionRef.current,
+        mouthShapeRef.current,
+        visualStateRef.current,
+        imageCacheRef.current,
+        getRecordingFrameMetrics(canvas),
+      ).finally(() => {
+        if (recordingActiveRef.current) animationFrameRef.current = window.requestAnimationFrame(drawLoop);
+      });
+    };
+    drawLoop();
+
+    try {
+      const mimeType = getSupportedRecordingMimeType();
+      const recorder = new MediaRecorder(mediaStream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      const nextFilename = getRecordingFilename();
+      setFilename(nextFilename);
+      setRecordingState("recording");
+      setMessage(`録画中です。停止すると ${nextFilename} を保存できます。${audioNotice}`);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+
+      recorder.onerror = () => {
+        setRecordingState("error");
+        setMessage("録画中にエラーが起きました。短めの録画で再試行してください。");
+      };
+
+      recorder.onstop = () => {
+        recordingActiveRef.current = false;
+        window.cancelAnimationFrame(animationFrameRef.current);
+        audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+        audioStreamRef.current = null;
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = new MediaStream();
+
+        if (!chunksRef.current.length) {
+          setRecordingState("error");
+          setMessage("録画データを作成できませんでした。もう一度試してください。");
+          return;
+        }
+
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "video/webm" });
+        const url = URL.createObjectURL(blob);
+        downloadUrlRef.current = url;
+        setDownloadUrl(url);
+        setRecordingState("ready");
+        setMessage("録画が完了しました。ダウンロードして確認できます。");
+      };
+
+      recorder.start(1000);
+    } catch {
+      recordingActiveRef.current = false;
+      window.cancelAnimationFrame(animationFrameRef.current);
+      mediaStream.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+      setRecordingState("error");
+      setMessage("録画を開始できませんでした。ブラウザの録画権限や対応形式を確認してください。");
+    }
+  }, []);
+
+  const size = getRecordingSize(settings.canvasAspectRatio);
+
+  return (
+    <aside className={`recordPanel ${recordingState}`} aria-label="recording controls">
+      <div>
+        <strong>{recordingState === "recording" ? "録画中" : recordingState === "ready" ? "録画完了" : "Canvas録画実験"}</strong>
+        <span>
+          {size.width}x{size.height} / WebM
+        </span>
+      </div>
+      <p>{message}</p>
+      <div className="recordActions">
+        <button type="button" onClick={() => void startRecording()} disabled={recordingState === "recording"}>
+          録画開始
+        </button>
+        <button type="button" onClick={stopRecording} disabled={recordingState !== "recording"}>
+          停止
+        </button>
+        {downloadUrl && (
+          <a className="avatarLink" href={downloadUrl} download={filename}>
+            ダウンロード
+          </a>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function AvatarStage({
+  audioLevel,
+  cameraFollow,
+  manualGazeRequest,
   manualBlinkSignal,
   mouthShape,
+  onGazeDebug,
+  onVisualState,
   reaction,
   route,
   settings,
 }: {
+  audioLevel: number;
+  cameraFollow: CameraFollow;
+  manualGazeRequest: { direction: EyeImageSlot; signal: number };
   manualBlinkSignal: number;
   mouthShape: MouthShape;
+  onGazeDebug: (debug: GazeDebug) => void;
+  onVisualState: (state: AvatarVisualState) => void;
   reaction: Reaction;
   route: AppRoute;
   settings: Settings;
 }) {
   const isBlinking = useNormalBlink(reaction, settings, manualBlinkSignal);
+  const eyeDirection = useIdleGaze(reaction, settings, manualGazeRequest, cameraFollow);
+  const [reactionStartedAt, setReactionStartedAt] = useState(() => performance.now());
+  const lifeMotionStyle = useLifeV2Motion(reaction, settings, mouthShape, audioLevel, cameraFollow);
   const image = settings.images[reaction];
   const showBlinkOverlay = reaction === "normal" && isBlinking && Boolean(settings.normalBlinkImage) && isValidBlinkCrop(settings.blinkCrop);
-  const showBlinkGuide = route === "settings" && reaction === "normal" && settings.blinkEnabled && Boolean(settings.normalBlinkImage);
+  const showBlinkGuide =
+    route === "settings" &&
+    reaction === "normal" &&
+    settings.adjustmentGuidesEnabled &&
+    settings.blinkEnabled &&
+    Boolean(settings.normalBlinkImage);
+  const eyeOverlaySrc = reaction === "normal" && !isBlinking && settings.gazeEnabled ? getEyeOverlaySrc(eyeDirection, settings.eyeImages) : undefined;
+  const showEyeOverlay = Boolean(eyeOverlaySrc) && isValidBlinkCrop(settings.blinkCrop);
   const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, settings.mouthImages) : undefined;
   const showMouthOverlay =
     reaction === "normal" &&
@@ -1359,7 +2849,7 @@ function AvatarStage({
     mouthShape !== "closed" &&
     Boolean(mouthOverlaySrc) &&
     isValidMouthCrop(settings.mouthCrop);
-  const showMouthGuide = route === "settings" && reaction === "normal" && settings.lipSyncEnabled;
+  const showMouthGuide = route === "settings" && reaction === "normal" && settings.adjustmentGuidesEnabled && settings.lipSyncEnabled;
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
   const useAvatarLayout = route !== "settings";
   const size = useAvatarLayout ? settings.avatarSize : settings.size;
@@ -1368,6 +2858,27 @@ function AvatarStage({
   const staticImage = `/reactions/${reaction}.png`;
   const frameBackground = getFrameBackground(settings);
   const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
+
+  useEffect(() => {
+    onGazeDebug(getGazeDebug(reaction, settings, eyeDirection));
+  }, [
+    eyeDirection,
+    onGazeDebug,
+    reaction,
+    settings.blinkCrop,
+    settings.eyeImages.lookLeft,
+    settings.eyeImages.lookRight,
+    settings.gazeEnabled,
+    settings.lifeEnabled,
+  ]);
+
+  useEffect(() => {
+    setReactionStartedAt(performance.now());
+  }, [reaction]);
+
+  useEffect(() => {
+    onVisualState({ isBlinking, eyeDirection, reactionStartedAt });
+  }, [eyeDirection, isBlinking, onVisualState, reactionStartedAt]);
 
   return (
     <section
@@ -1393,21 +2904,28 @@ function AvatarStage({
         >
           <div key={reaction} className="avatar">
             <ReactionEffects reaction={reaction} />
-            <AvatarImage
-              alt={label}
-              blinkCrop={settings.blinkCrop}
-              blinkOverlaySrc={reaction === "normal" ? settings.normalBlinkImage : undefined}
-              mouthCrop={settings.mouthCrop}
-              mouthOverlaySrc={mouthOverlaySrc}
-              outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
-              primarySrc={image}
-              reaction={reaction}
-              showBlinkGuide={showBlinkGuide}
-              showBlinkOverlay={showBlinkOverlay}
-              showMouthGuide={showMouthGuide}
-              showMouthOverlay={showMouthOverlay}
-              staticSrc={staticImage}
-            />
+            <div className="avatarLifeLayer" style={lifeMotionStyle}>
+              <div className={`avatarTalkLayer${reaction === "normal" && settings.lifeEnabled && settings.speechMotionEnabled && mouthShape !== "closed" ? " speaking" : ""}`}>
+                <AvatarImage
+                  alt={label}
+                  blinkCrop={settings.blinkCrop}
+                  blinkOverlaySrc={reaction === "normal" ? settings.normalBlinkImage : undefined}
+                  eyeOverlaySrc={eyeOverlaySrc}
+                  mouthCrop={settings.mouthCrop}
+                  mouthOverlaySrc={mouthOverlaySrc}
+                  outlineQuality={settings.outlineQuality ?? "standard"}
+                  outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
+                  primarySrc={image}
+                  reaction={reaction}
+                  showBlinkGuide={showBlinkGuide}
+                  showBlinkOverlay={showBlinkOverlay}
+                  showEyeOverlay={showEyeOverlay}
+                  showMouthGuide={showMouthGuide}
+                  showMouthOverlay={showMouthOverlay}
+                  staticSrc={staticImage}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1419,13 +2937,16 @@ function AvatarImage({
   alt,
   blinkCrop,
   blinkOverlaySrc,
+  eyeOverlaySrc,
   mouthCrop,
   mouthOverlaySrc,
+  outlineQuality,
   outlineWidth,
   primarySrc,
   reaction,
   showBlinkGuide,
   showBlinkOverlay,
+  showEyeOverlay,
   showMouthGuide,
   showMouthOverlay,
   staticSrc,
@@ -1433,13 +2954,16 @@ function AvatarImage({
   alt: string;
   blinkCrop: BlinkCrop;
   blinkOverlaySrc: string | undefined;
+  eyeOverlaySrc: string | undefined;
   mouthCrop: MouthCrop;
   mouthOverlaySrc: string | undefined;
+  outlineQuality: OutlineQuality;
   outlineWidth: string;
   primarySrc: string | undefined;
   reaction: Reaction;
   showBlinkGuide: boolean;
   showBlinkOverlay: boolean;
+  showEyeOverlay: boolean;
   showMouthGuide: boolean;
   showMouthOverlay: boolean;
   staticSrc: string;
@@ -1465,7 +2989,7 @@ function AvatarImage({
   return (
     <div className="avatarImageWrap">
       <img
-        className="avatarImage"
+        className={`avatarImage outline-${outlineQuality}`}
         src={src}
         alt={alt}
         draggable={false}
@@ -1478,6 +3002,16 @@ function AvatarImage({
         <img
           className={`blinkOverlayImage${showBlinkOverlay ? " visible" : ""}`}
           src={blinkOverlaySrc}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{ clipPath: blinkClipPath }}
+        />
+      )}
+      {eyeOverlaySrc && (
+        <img
+          className={`eyeOverlayImage${showEyeOverlay ? " visible" : ""}`}
+          src={eyeOverlaySrc}
           alt=""
           aria-hidden="true"
           draggable={false}
@@ -1563,13 +3097,17 @@ type SettingsPanelProps = {
   settings: Settings;
   reaction: Reaction;
   debug: TrackingDebug;
+  gazeDebug: GazeDebug;
+  cameraFollow: CameraFollow;
   audioDebug: AudioDebug;
   devices: MediaDeviceInfo[];
   audioDevices: MediaDeviceInfo[];
   cameraError: string;
   audioError: string;
   onChange: (patch: Partial<Settings>) => void;
+  onCalibrateAudio: () => void;
   onManualBlink: () => void;
+  onManualGaze: (direction: EyeImageSlot) => void;
   onManualMouth: (mouthShape: MouthShape) => void;
   onManualReaction: (reaction: Reaction) => void;
 };
@@ -1578,17 +3116,22 @@ function SettingsPanel({
   settings,
   reaction,
   debug,
+  gazeDebug,
+  cameraFollow,
   audioDebug,
   devices,
   audioDevices,
   cameraError,
   audioError,
   onChange,
+  onCalibrateAudio,
   onManualBlink,
+  onManualGaze,
   onManualMouth,
   onManualReaction,
 }: SettingsPanelProps) {
   const [imageMessage, setImageMessage] = useState("");
+  const lifeMode = getLifeMode(settings);
   const updateBlinkCrop = (patch: Partial<BlinkCrop>) => {
     onChange({ blinkCrop: clampBlinkCrop({ ...settings.blinkCrop, ...patch }) });
   };
@@ -1626,6 +3169,7 @@ function SettingsPanel({
           backgroundImage: undefined,
           backgroundMode: settings.backgroundMode === "image" ? "green" : settings.backgroundMode,
           normalBlinkImage: undefined,
+          eyeImages: {},
           mouthImages: {},
         });
         setImageMessage("登録画像をクリアしました。");
@@ -1722,6 +3266,44 @@ function SettingsPanel({
       });
   };
 
+  const handleEyeUpload = (slot: EyeImageSlot, file: File | undefined) => {
+    if (!file) return;
+    setImageMessage(`${file.name} を${eyeImageSlots.find((item) => item.key === slot)?.label ?? "目線差分"}として読み込み中...`);
+    void readFileAsDataUrl(file)
+      .then((dataUrl) => {
+        onChange({
+          eyeImages: {
+            ...settings.eyeImages,
+            [slot]: dataUrl,
+          },
+          gazeEnabled: true,
+        });
+        return saveEyeImage(slot, dataUrl).then(() => {
+          setImageMessage(`${file.name} を目線差分として登録しました。`);
+        });
+      })
+      .catch((error) => {
+        setImageMessage("目線差分の登録に失敗しました。容量が大きすぎる可能性があります。");
+        console.error(error);
+        console.error(`${slot} eye image could not be saved.`);
+      });
+  };
+
+  const handleDeleteEye = (slot: EyeImageSlot) => {
+    void deleteEyeImage(slot)
+      .then(() => {
+        const nextEyeImages = { ...settings.eyeImages };
+        delete nextEyeImages[slot];
+        onChange({ eyeImages: nextEyeImages });
+        setImageMessage(`${eyeImageSlots.find((item) => item.key === slot)?.label ?? "目線差分"}を削除しました。`);
+      })
+      .catch((error) => {
+        setImageMessage("目線差分の削除に失敗しました。");
+        console.error(error);
+        console.error(`${slot} eye image could not be deleted.`);
+      });
+  };
+
   const handleMouthUpload = (slot: MouthImageSlot, file: File | undefined) => {
     if (!file) return;
     setImageMessage(`${file.name} を${mouthImageSlots.find((item) => item.key === slot)?.label ?? "口パク画像"}として読み込み中...`);
@@ -1768,14 +3350,22 @@ function SettingsPanel({
           <p>ポーズで立ち絵リアクションを呼び出す</p>
         </div>
         <div className="headerLinks">
-          <a className="avatarLink" href="/capture" target="_blank" rel="noreferrer">
-            /capture
+          <a className="avatarLink" href="/record" target="_blank" rel="noreferrer">
+            録画表示
           </a>
-          <a className="avatarLink" href="/avatar" target="_blank" rel="noreferrer">
-            /avatar
+          <a className="avatarLink" href="/canvas" target="_blank" rel="noreferrer">
+            Canvas実験
           </a>
         </div>
       </header>
+
+      <section className="desktopLaunchNote" aria-label="Macアプリ起動">
+        <div>
+          <strong>Macアプリで録画する</strong>
+          <p>Electronウィンドウはターミナルから起動します。</p>
+        </div>
+        <code>npm run desktop</code>
+      </section>
 
       <section className="section">
         <h2>トラッキング</h2>
@@ -1871,14 +3461,21 @@ function SettingsPanel({
 
       <section className="section">
         <h2>生命感</h2>
-        <label className="switchRow">
-          <span>生命感エフェクト</span>
-          <input
-            type="checkbox"
-            checked={settings.lifeEnabled}
-            onChange={(event) => onChange({ lifeEnabled: event.target.checked })}
-          />
-        </label>
+        <div className="segmentedControl" aria-label="動きの強さ">
+          {lifeModeOptions.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={lifeMode === item.key ? "active" : ""}
+              onClick={() => onChange(getLifeModePatch(item.key))}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="hint">通常表示中のまばたき、呼吸、発話ゆらぎ、目線、カメラ反応をまとめて調整します。</p>
+
+        <h3 className="sectionSubhead">基本</h3>
         <label className="switchRow">
           <span>まばたき</span>
           <input
@@ -1895,17 +3492,68 @@ function SettingsPanel({
             onChange={(event) => onChange({ motionEnabled: event.target.checked })}
           />
         </label>
-        <label>
-          エフェクトの強さ
-          <select
-            value={settings.lifeIntensity}
-            onChange={(event) => onChange({ lifeIntensity: event.target.value as LifeIntensity })}
-          >
-            <option value="subtle">弱</option>
-            <option value="standard">標準</option>
-            <option value="strong">強</option>
-          </select>
+        <label className="switchRow">
+          <span>口パク連動ゆらぎ</span>
+          <input
+            type="checkbox"
+            checked={settings.speechMotionEnabled}
+            onChange={(event) => onChange({ speechMotionEnabled: event.target.checked })}
+          />
         </label>
+        <Range
+          label="動きの量"
+          min={0}
+          max={100}
+          step={5}
+          value={settings.lifeMotionStrength}
+          onChange={(lifeMotionStrength) => onChange({ lifeMotionStrength, lifeEnabled: lifeMotionStrength > 0 })}
+        />
+
+        <h3 className="sectionSubhead">反応</h3>
+        <label className="switchRow">
+          <span>待機ランダム</span>
+          <input
+            type="checkbox"
+            checked={settings.idleMotionEnabled}
+            onChange={(event) => onChange({ idleMotionEnabled: event.target.checked })}
+          />
+        </label>
+        <label className="switchRow">
+          <span>目線差分</span>
+          <input
+            type="checkbox"
+            checked={settings.gazeEnabled}
+            onChange={(event) => onChange({ gazeEnabled: event.target.checked })}
+          />
+        </label>
+        <label className="switchRow">
+          <span>カメラ追従</span>
+          <input
+            type="checkbox"
+            checked={settings.cameraFollowEnabled}
+            onChange={(event) => onChange({ cameraFollowEnabled: event.target.checked })}
+          />
+        </label>
+        <Range
+          label="カメラ追従強度"
+          min={0}
+          max={100}
+          step={5}
+          value={settings.cameraFollowStrength}
+          onChange={(cameraFollowStrength) => onChange({ cameraFollowStrength })}
+        />
+
+        <h3 className="sectionSubhead">調整表示</h3>
+        <label className="switchRow">
+          <span>位置調整枠</span>
+          <input
+            type="checkbox"
+            checked={settings.adjustmentGuidesEnabled}
+            onChange={(event) => onChange({ adjustmentGuidesEnabled: event.target.checked })}
+          />
+        </label>
+
+        <h3 className="sectionSubhead">差分画像</h3>
         <div className="fileSlot backgroundFileSlot">
           <span>
             通常まばたき
@@ -1938,6 +3586,43 @@ function SettingsPanel({
             </button>
           </div>
         </div>
+        <div className="imageGrid">
+          {eyeImageSlots.map((item) => (
+            <div key={item.key} className="fileSlot">
+              <span>
+                {item.label}
+                <small>{item.file}</small>
+                <small className={settings.eyeImages[item.key] ? "savedBadge" : "emptyBadge"}>
+                  {settings.eyeImages[item.key] ? "登録済み" : "未登録"}
+                </small>
+              </span>
+              <div className="fileActions">
+                <label className="filePicker">
+                  画像を選択
+                  <input
+                    type="file"
+                    accept="image/png,image/*"
+                    onClick={(event) => {
+                      event.currentTarget.value = "";
+                    }}
+                    onChange={(event) => {
+                      handleEyeUpload(item.key, event.target.files?.[0]);
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="deleteImageButton"
+                  disabled={!settings.eyeImages[item.key]}
+                  onClick={() => handleDeleteEye(item.key)}
+                >
+                  削除
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <h3 className="sectionSubhead">範囲調整</h3>
         <div className="rangeGroup">
           <p className="hint">黄色い枠を通常画像の目元に合わせてください。</p>
           <Range
@@ -2009,7 +3694,7 @@ function SettingsPanel({
           </select>
         </label>
         <Range
-          label="音量しきい値"
+          label="発話しきい値"
           min={1}
           max={100}
           step={1}
@@ -2018,10 +3703,14 @@ function SettingsPanel({
         />
         <div className="statusGrid">
           <Status label="音量" value={audioDebug.volume.toFixed(1)} />
+          <Status label="差分" value={audioDebug.speechLevel.toFixed(1)} />
           <Status label="口形" value={getMouthShapeLabel(audioDebug.mouthShape)} />
         </div>
         <p className="hint">{audioDebug.status}</p>
         {audioError && <p className="error">{audioError}</p>}
+        <button type="button" onClick={onCalibrateAudio} disabled={!settings.lipSyncEnabled || !settings.audioInputEnabled}>
+          環境音を再測定
+        </button>
         <p className="hint">通常表示中だけ、登録した口元差分を音量に合わせて重ねます。マイク連動には「口パク」と「マイク音声で動かす」の両方をONにしてください。</p>
         <div className="imageGrid">
           {mouthImageSlots.map((item) => (
@@ -2135,6 +3824,17 @@ function SettingsPanel({
             onChange={(event) => onChange({ outlineEnabled: event.target.checked })}
           />
         </label>
+        <label>
+          白フチ品質
+          <select
+            value={settings.outlineQuality ?? "standard"}
+            onChange={(event) => onChange({ outlineQuality: event.target.value as OutlineQuality })}
+            disabled={!settings.outlineEnabled}
+          >
+            <option value="light">軽量</option>
+            <option value="standard">標準</option>
+          </select>
+        </label>
         <Range
           label="白フチ太さ"
           min={0}
@@ -2214,6 +3914,17 @@ function SettingsPanel({
 
       <section className="section">
         <h2>デバッグ</h2>
+        <div className="statusGrid">
+          <Status label="目線" value={getEyeDirectionLabel(gazeDebug.direction)} />
+          <Status label="目線状態" value={gazeDebug.status} />
+          <Status label="目線左" value={gazeDebug.hasLeft ? "登録済み" : "未登録"} />
+          <Status label="目線右" value={gazeDebug.hasRight ? "登録済み" : "未登録"} />
+          <Status label="目元範囲" value={gazeDebug.cropValid ? "有効" : "無効"} />
+          <Status label="顔追従" value={getCameraFollowStatus(settings, cameraFollow)} />
+          <Status label="追従X" value={cameraFollow.visible ? cameraFollow.x.toFixed(2) : "-"} />
+          <Status label="追従Y" value={cameraFollow.visible ? cameraFollow.y.toFixed(2) : "-"} />
+          <Status label="追従強度" value={`${settings.cameraFollowStrength}`} />
+        </div>
         <div className="reactionButtons">
           {reactions.map((item) => (
             <button key={item.key} type="button" onClick={() => onManualReaction(item.key)}>
@@ -2226,6 +3937,32 @@ function SettingsPanel({
             onClick={onManualBlink}
           >
             目閉じ
+          </button>
+          <button
+            type="button"
+            disabled={
+              reaction !== "normal" ||
+              !settings.lifeEnabled ||
+              !settings.gazeEnabled ||
+              !settings.eyeImages.lookLeft ||
+              !isValidBlinkCrop(settings.blinkCrop)
+            }
+            onClick={() => onManualGaze("lookLeft")}
+          >
+            目線左
+          </button>
+          <button
+            type="button"
+            disabled={
+              reaction !== "normal" ||
+              !settings.lifeEnabled ||
+              !settings.gazeEnabled ||
+              !settings.eyeImages.lookRight ||
+              !isValidBlinkCrop(settings.blinkCrop)
+            }
+            onClick={() => onManualGaze("lookRight")}
+          >
+            目線右
           </button>
           <button
             type="button"

@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "desktop": "npm run build && electron electron/main.cjs",
+    "desktop:dev": "electron electron/main.cjs --dev",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "vite": "^6.0.7"
   },
   "devDependencies": {
+    "electron": "^33.4.11",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3"
   }
