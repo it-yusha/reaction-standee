@@ -901,6 +901,12 @@ function getAppRoute(): AppRoute {
   return "settings";
 }
 
+function getAppRouteHref(route: Exclude<AppRoute, "settings">) {
+  const baseUrl = import.meta.env.BASE_URL;
+  if (baseUrl && baseUrl !== "/") return `${baseUrl}?route=${route}`;
+  return `/${route}`;
+}
+
 function readPerfOptions(): PerfOptions {
   const params = new URLSearchParams(window.location.search);
   const isEnabled = params.get("perf") === "1" || params.get("perf") === "true";
@@ -3549,10 +3555,10 @@ function SettingsPanel({
           <p>ポーズで立ち絵リアクションを呼び出す</p>
         </div>
         <div className="headerLinks">
-          <a className="avatarLink" href="/record" target="_blank" rel="noreferrer">
+          <a className="avatarLink" href={getAppRouteHref("record")} target="_blank" rel="noreferrer">
             録画表示
           </a>
-          <a className="avatarLink" href="/canvas" target="_blank" rel="noreferrer">
+          <a className="avatarLink" href={getAppRouteHref("canvas")} target="_blank" rel="noreferrer">
             Canvas実験
           </a>
         </div>

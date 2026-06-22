@@ -31,6 +31,32 @@ http://127.0.0.1:5173/canvas
 
 初回トラッキング時に、MediaPipe Pose LandmarkerのWASMとモデルをブラウザが読み込みます。
 
+## GitHub Pages公開
+
+このリポジトリは、GitHub Pagesへ静的Webアプリとして公開できる構成です。
+
+```bash
+npm run build:pages
+```
+
+`main` ブランチへpushすると、GitHub Actionsの `Deploy GitHub Pages` ワークフローが `dist/` をビルドし、GitHub Pagesへデプロイします。GitHub側では、リポジトリの Pages 設定で Source を `GitHub Actions` にしてください。
+
+想定URL:
+
+```text
+https://it-yusha.github.io/reaction-standee/
+```
+
+公開版では、静的ホスティングで直URLが404になりやすいため、録画表示は以下のようにクエリで開きます。
+
+```text
+https://it-yusha.github.io/reaction-standee/?route=record
+```
+
+公開版の画像や設定は、基本的にアクセスしたブラウザ内に保存されます。ローカル開発版で使う `.reaction-standee/` の共有ローカル保存やWKWebView録画ウィンドウは、自分のMacでの制作・録画向けの補助機能です。
+
+カメラ映像とマイク音声は、ポーズ認識と口パク判定のためにブラウザ内で処理します。このアプリ自体は、カメラ映像や音声をサーバーへ送信・保存しません。
+
 ## v1機能
 
 - MediaPipe Pose LandmarkerによるWebカメラポーズ認識

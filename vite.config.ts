@@ -244,8 +244,10 @@ function broadcastReaction() {
   clients.forEach((client) => client.write(message));
 }
 
+const isGitHubPagesBuild = process.env.GITHUB_PAGES === "true";
+
 export default defineConfig({
-  base: "./",
+  base: isGitHubPagesBuild ? "/reaction-standee/" : "/",
   plugins: [
     react(),
     {
