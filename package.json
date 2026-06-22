@@ -8,6 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "desktop": "npm run build && electron electron/main.cjs",
     "desktop:dev": "electron electron/main.cjs --dev",
+    "wk:record": "bash scripts/run-wk-record-preview.sh",
+    "wk:record:perf": "bash scripts/run-wk-record-preview.sh \"http://127.0.0.1:5173/record?perf=1&camera=low&inferFps=30\"",
+    "wk:install": "bash scripts/install-wk-record-preview.sh",
     "preview": "vite preview"
   },
   "dependencies": {

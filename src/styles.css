@@ -337,6 +337,73 @@ button:disabled:hover {
   background: rgba(255, 120, 42, 0.12);
 }
 
+.perfOverlay {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  z-index: 80;
+  display: grid;
+  gap: 3px;
+  min-width: 148px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #eef6ff;
+  background: rgba(9, 13, 20, 0.78);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.perfOverlay strong {
+  font-size: 13px;
+}
+
+.perfOverlay span,
+.perfOverlay small {
+  color: #b7c5d9;
+  font-variant-numeric: tabular-nums;
+}
+
+.perfOverlay small {
+  color: #fbd38d;
+}
+
+.perf-no-outline .avatarImage,
+.perf-no-outline .avatarImage.outline-light,
+.perf-no-outline .avatarImage.outline-standard {
+  filter: none !important;
+}
+
+.perf-no-effects .effectLayer {
+  display: none !important;
+}
+
+.perf-no-overlays .blinkOverlayImage,
+.perf-no-overlays .eyeOverlayImage,
+.perf-no-overlays .mouthOverlayImage {
+  display: none !important;
+}
+
+.perf-no-motion .avatar,
+.perf-no-motion .avatarImage,
+.perf-no-motion .avatarLifeLayer,
+.perf-no-motion .avatarTalkLayer,
+.perf-no-motion .effectLayer,
+.perf-no-motion .effectLayer *,
+.perf-no-motion .blinkOverlayImage,
+.perf-no-motion .eyeOverlayImage,
+.perf-no-motion .mouthOverlayImage {
+  animation: none !important;
+  transition: none !important;
+}
+
+.perf-no-motion .avatarLifeLayer,
+.perf-no-motion .avatarTalkLayer {
+  transform: none !important;
+}
+
 .life-on.motion-on.reaction-normal .avatar {
   animation:
     normalReturn 520ms cubic-bezier(0.18, 1.05, 0.26, 1) both,

@@ -86,6 +86,10 @@ type TrackingDebug = {
   stableForMs: number;
   confidence: number;
   status: string;
+  inferenceFps?: number;
+  inferenceMs?: number;
+  videoHeight?: number;
+  videoWidth?: number;
 };
 
 type AudioDebug = {
@@ -137,6 +141,24 @@ type RecordingTransform = {
   d: number;
   e: number;
   f: number;
+};
+
+type PerfOptions = {
+  cameraPreset: "default" | "low";
+  enabled: boolean;
+  maxInferenceFps: number;
+  noBackground: boolean;
+  noEffects: boolean;
+  noMotion: boolean;
+  noOutline: boolean;
+  noOverlays: boolean;
+};
+
+type PerfMetrics = {
+  avgFrameMs: number;
+  fps: number;
+  longFrames: number;
+  worstFrameMs: number;
 };
 
 type Classification = {
@@ -879,8 +901,41 @@ function getAppRoute(): AppRoute {
   return "settings";
 }
 
+function readPerfOptions(): PerfOptions {
+  const params = new URLSearchParams(window.location.search);
+  const isEnabled = params.get("perf") === "1" || params.get("perf") === "true";
+  const maxInferenceFps = Number(params.get("inferFps") ?? "0");
+  return {
+    cameraPreset: params.get("camera") === "low" || params.get("cam") === "low" ? "low" : "default",
+    enabled: isEnabled,
+    maxInferenceFps: Number.isFinite(maxInferenceFps) ? clamp(maxInferenceFps, 0, 60) : 0,
+    noBackground: isEnabled && (params.get("noBg") === "1" || params.get("noBackground") === "1"),
+    noEffects: isEnabled && params.get("noEffects") === "1",
+    noMotion: isEnabled && params.get("noMotion") === "1",
+    noOutline: isEnabled && params.get("noOutline") === "1",
+    noOverlays: isEnabled && params.get("noOverlays") === "1",
+  };
+}
+
+function getPerfClassName(options: PerfOptions) {
+  if (!options.enabled) return "";
+  return [
+    "perf",
+    options.cameraPreset === "low" ? "perf-camera-low" : "",
+    options.maxInferenceFps ? "perf-infer-limit" : "",
+    options.noBackground ? "perf-no-background" : "",
+    options.noEffects ? "perf-no-effects" : "",
+    options.noMotion ? "perf-no-motion" : "",
+    options.noOutline ? "perf-no-outline" : "",
+    options.noOverlays ? "perf-no-overlays" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function App() {
   const route = getAppRoute();
+  const perfOptions = readPerfOptions();
   const [settings, setSettings] = useState<Settings>(() => readSettings());
   const [reaction, setReaction] = useState<Reaction>("normal");
   const [debug, setDebug] = useState<TrackingDebug>({
@@ -1118,6 +1173,7 @@ function App() {
     enabled: route !== "avatar" && settings.trackingEnabled,
     deviceId: settings.selectedDeviceId,
     sensitivity: settings.sensitivity,
+    perfOptions,
     videoRef,
     onReaction: setReaction,
     onDebug: setDebug,
@@ -1157,7 +1213,7 @@ function App() {
   const isElectronRecord = route === "record" && navigator.userAgent.includes("Electron");
 
   return (
-    <main className={`app ${route}${isElectronRecord ? " electronRecord" : ""}`}>
+    <main className={`app ${route}${isElectronRecord ? " electronRecord" : ""} ${getPerfClassName(perfOptions)}`}>
       {isElectronRecord && <div className="electronDragBar" aria-hidden="true" />}
       <AvatarStage
         manualGazeRequest={manualGazeRequest}
@@ -1169,9 +1225,11 @@ function App() {
         settings={settings}
         audioLevel={audioDebug.volume}
         cameraFollow={cameraFollow}
+        perfOptions={perfOptions}
         onVisualState={setAvatarVisualState}
       />
       <video ref={videoRef} className="trackingVideo" muted playsInline />
+      {perfOptions.enabled && <PerfOverlay debug={debug} options={perfOptions} route={route} />}
 
       {route === "canvas" && <CanvasRecordPanel settings={settings} reaction={reaction} mouthShape={mouthShape} visualState={avatarVisualState} />}
 
@@ -1202,6 +1260,7 @@ function App() {
 type TrackingArgs = {
   enabled: boolean;
   deviceId: string;
+  perfOptions: PerfOptions;
   sensitivity: Sensitivity;
   videoRef: React.MutableRefObject<HTMLVideoElement | null>;
   onReaction: (reaction: Reaction) => void;
@@ -1214,6 +1273,7 @@ type TrackingArgs = {
 function usePoseTracking({
   enabled,
   deviceId,
+  perfOptions,
   sensitivity,
   videoRef,
   onReaction,
@@ -1240,7 +1300,7 @@ function usePoseTracking({
       onError("");
 
       if (!enabled) {
-        onDebug({ candidate: "normal", stableForMs: 0, confidence: 0, status: "停止中" });
+        onDebug({ candidate: "normal", stableForMs: 0, confidence: 0, status: "停止中", inferenceFps: 0, inferenceMs: 0 });
         onCameraFollow({ x: 0, y: 0, visible: false });
         return;
       }
@@ -1281,17 +1341,17 @@ function usePoseTracking({
           handLandmarkerRef.current = handLandmarker;
         }
 
+        const cameraSize =
+          perfOptions.cameraPreset === "low"
+            ? { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 30, max: 30 } }
+            : { width: { ideal: 1280 }, height: { ideal: 720 } };
         const stream = await navigator.mediaDevices.getUserMedia({
           video: deviceId
             ? {
                 deviceId: { exact: deviceId },
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
+                ...cameraSize,
               }
-            : {
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-              },
+            : cameraSize,
           audio: false,
         });
         if (cancelled) {
@@ -1307,6 +1367,12 @@ function usePoseTracking({
 
         lastSeenRef.current = performance.now();
         onDebug({ candidate: "normal", stableForMs: 0, confidence: 0, status: "トラッキング中" });
+        let inferenceCount = 0;
+        let inferenceTotalMs = 0;
+        let inferenceWindowStartedAt = performance.now();
+        let lastInferenceFps = 0;
+        let lastInferenceMs = 0;
+        let lastInferenceAt = 0;
 
         const tick = () => {
           const landmarker = landmarkerRef.current;
@@ -1317,8 +1383,24 @@ function usePoseTracking({
           }
 
           const now = performance.now();
+          if (perfOptions.maxInferenceFps > 0 && now - lastInferenceAt < 1000 / perfOptions.maxInferenceFps) {
+            animationRef.current = requestAnimationFrame(tick);
+            return;
+          }
+          lastInferenceAt = now;
+          const inferenceStartedAt = performance.now();
           const result = landmarker.detectForVideo(video, now);
           const handResult = handLandmarker.detectForVideo(video, now);
+          const inferenceMs = performance.now() - inferenceStartedAt;
+          inferenceCount += 1;
+          inferenceTotalMs += inferenceMs;
+          if (now - inferenceWindowStartedAt >= 1000) {
+            lastInferenceFps = (inferenceCount * 1000) / Math.max(1, now - inferenceWindowStartedAt);
+            lastInferenceMs = inferenceTotalMs / Math.max(1, inferenceCount);
+            inferenceWindowStartedAt = now;
+            inferenceCount = 0;
+            inferenceTotalMs = 0;
+          }
           if (result.landmarks[0]) {
             lastSeenRef.current = now;
             onCameraFollow(getCameraFollowFromLandmarks(result.landmarks[0], sensitivity));
@@ -1333,7 +1415,13 @@ function usePoseTracking({
             lastSwitchRef,
             onReaction,
           });
-          onDebug(debug);
+          onDebug({
+            ...debug,
+            inferenceFps: lastInferenceFps,
+            inferenceMs: lastInferenceMs,
+            videoHeight: video.videoHeight,
+            videoWidth: video.videoWidth,
+          });
           animationRef.current = requestAnimationFrame(tick);
         };
 
@@ -1341,7 +1429,7 @@ function usePoseTracking({
       } catch (error) {
         const message = error instanceof Error ? error.message : "カメラを開始できませんでした。";
         onError(message);
-        onDebug({ candidate: "normal", stableForMs: 0, confidence: 0, status: "エラー" });
+        onDebug({ candidate: "normal", stableForMs: 0, confidence: 0, status: "エラー", inferenceFps: 0, inferenceMs: 0 });
       }
     }
 
@@ -1351,7 +1439,7 @@ function usePoseTracking({
       cancelled = true;
       stopCamera(streamRef, animationRef);
     };
-  }, [deviceId, enabled, onCameraFollow, onDebug, onDevices, onError, onReaction, sensitivity, videoRef]);
+  }, [deviceId, enabled, onCameraFollow, onDebug, onDevices, onError, onReaction, perfOptions.cameraPreset, perfOptions.maxInferenceFps, sensitivity, videoRef]);
 }
 
 function stopCamera(
@@ -1450,8 +1538,20 @@ function useLipSyncAudio({
       }
 
       try {
+        const audioConstraints: MediaTrackConstraints = deviceId
+          ? {
+              deviceId: { exact: deviceId },
+              autoGainControl: false,
+              echoCancellation: false,
+              noiseSuppression: false,
+            }
+          : {
+              autoGainControl: false,
+              echoCancellation: false,
+              noiseSuppression: false,
+            };
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: deviceId ? { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true } : true,
+          audio: audioConstraints,
           video: false,
         });
         if (cancelled) {
@@ -2816,6 +2916,7 @@ function AvatarStage({
   reaction,
   route,
   settings,
+  perfOptions,
 }: {
   audioLevel: number;
   cameraFollow: CameraFollow;
@@ -2827,13 +2928,15 @@ function AvatarStage({
   reaction: Reaction;
   route: AppRoute;
   settings: Settings;
+  perfOptions: PerfOptions;
 }) {
   const isBlinking = useNormalBlink(reaction, settings, manualBlinkSignal);
   const eyeDirection = useIdleGaze(reaction, settings, manualGazeRequest, cameraFollow);
   const [reactionStartedAt, setReactionStartedAt] = useState(() => performance.now());
   const lifeMotionStyle = useLifeV2Motion(reaction, settings, mouthShape, audioLevel, cameraFollow);
   const image = settings.images[reaction];
-  const showBlinkOverlay = reaction === "normal" && isBlinking && Boolean(settings.normalBlinkImage) && isValidBlinkCrop(settings.blinkCrop);
+  const showBlinkOverlay =
+    !perfOptions.noOverlays && reaction === "normal" && isBlinking && Boolean(settings.normalBlinkImage) && isValidBlinkCrop(settings.blinkCrop);
   const showBlinkGuide =
     route === "settings" &&
     reaction === "normal" &&
@@ -2841,10 +2944,11 @@ function AvatarStage({
     settings.blinkEnabled &&
     Boolean(settings.normalBlinkImage);
   const eyeOverlaySrc = reaction === "normal" && !isBlinking && settings.gazeEnabled ? getEyeOverlaySrc(eyeDirection, settings.eyeImages) : undefined;
-  const showEyeOverlay = Boolean(eyeOverlaySrc) && isValidBlinkCrop(settings.blinkCrop);
+  const showEyeOverlay = !perfOptions.noOverlays && Boolean(eyeOverlaySrc) && isValidBlinkCrop(settings.blinkCrop);
   const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, settings.mouthImages) : undefined;
   const showMouthOverlay =
     reaction === "normal" &&
+    !perfOptions.noOverlays &&
     settings.lipSyncEnabled &&
     mouthShape !== "closed" &&
     Boolean(mouthOverlaySrc) &&
@@ -2856,7 +2960,7 @@ function AvatarStage({
   const x = useAvatarLayout ? settings.avatarX : settings.x;
   const y = useAvatarLayout ? settings.avatarY : settings.y;
   const staticImage = `/reactions/${reaction}.png`;
-  const frameBackground = getFrameBackground(settings);
+  const frameBackground = perfOptions.noBackground ? "#090d14" : getFrameBackground(settings);
   const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
 
   useEffect(() => {
@@ -2903,7 +3007,7 @@ function AvatarStage({
           }}
         >
           <div key={reaction} className="avatar">
-            <ReactionEffects reaction={reaction} />
+            <ReactionEffects disabled={perfOptions.noEffects} reaction={reaction} />
             <div className="avatarLifeLayer" style={lifeMotionStyle}>
               <div className={`avatarTalkLayer${reaction === "normal" && settings.lifeEnabled && settings.speechMotionEnabled && mouthShape !== "closed" ? " speaking" : ""}`}>
                 <AvatarImage
@@ -3056,7 +3160,9 @@ function AvatarImage({
   );
 }
 
-function ReactionEffects({ reaction }: { reaction: Reaction }) {
+function ReactionEffects({ disabled, reaction }: { disabled: boolean; reaction: Reaction }) {
+  if (disabled) return null;
+
   if (reaction === "joy") {
     return (
       <div className="effectLayer joyFx" aria-hidden="true">
@@ -3091,6 +3197,99 @@ function ReactionEffects({ reaction }: { reaction: Reaction }) {
   }
 
   return null;
+}
+
+function usePerfMetrics(enabled: boolean): PerfMetrics {
+  const [metrics, setMetrics] = useState<PerfMetrics>({
+    avgFrameMs: 0,
+    fps: 0,
+    longFrames: 0,
+    worstFrameMs: 0,
+  });
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+
+    let animationFrame = 0;
+    let lastFrameAt = performance.now();
+    let bucketStartedAt = lastFrameAt;
+    let frames = 0;
+    let totalFrameMs = 0;
+    let longFrames = 0;
+    let worstFrameMs = 0;
+
+    const tick = (now: number) => {
+      const frameMs = now - lastFrameAt;
+      lastFrameAt = now;
+      frames += 1;
+      totalFrameMs += frameMs;
+      if (frameMs > 50) longFrames += 1;
+      worstFrameMs = Math.max(worstFrameMs, frameMs);
+
+      if (now - bucketStartedAt >= 1000) {
+        const elapsedSeconds = (now - bucketStartedAt) / 1000;
+        setMetrics({
+          avgFrameMs: totalFrameMs / Math.max(1, frames),
+          fps: frames / Math.max(0.001, elapsedSeconds),
+          longFrames,
+          worstFrameMs,
+        });
+        bucketStartedAt = now;
+        frames = 0;
+        totalFrameMs = 0;
+        longFrames = 0;
+        worstFrameMs = 0;
+      }
+
+      animationFrame = requestAnimationFrame(tick);
+    };
+
+    animationFrame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+    };
+  }, [enabled]);
+
+  return metrics;
+}
+
+function getRuntimeLabel() {
+  const ua = navigator.userAgent;
+  if (ua.includes("ReactionStandeeWKPreview")) return "WKWebView";
+  if (ua.includes("Electron")) return "Electron";
+  if (ua.includes("Chrome") || ua.includes("Chromium") || ua.includes("CriOS")) return "Chrome/Chromium";
+  if (ua.includes("Safari")) return "Safari";
+  return "Browser";
+}
+
+function PerfOverlay({ debug, options, route }: { debug: TrackingDebug; options: PerfOptions; route: AppRoute }) {
+  const metrics = usePerfMetrics(options.enabled);
+  const flags = [
+    options.cameraPreset === "low" ? "camera=low" : "",
+    options.maxInferenceFps ? `inferFps=${options.maxInferenceFps}` : "",
+    options.noBackground ? "noBg" : "",
+    options.noEffects ? "noEffects" : "",
+    options.noMotion ? "noMotion" : "",
+    options.noOutline ? "noOutline" : "",
+    options.noOverlays ? "noOverlays" : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  return (
+    <aside className="perfOverlay" aria-label="performance diagnostics">
+      <strong>Perf</strong>
+      <span>{getRuntimeLabel()}</span>
+      <span>route: {route}</span>
+      <span>fps: {metrics.fps.toFixed(1)}</span>
+      <span>avg: {metrics.avgFrameMs.toFixed(1)}ms</span>
+      <span>worst: {metrics.worstFrameMs.toFixed(1)}ms</span>
+      <span>long: {metrics.longFrames}</span>
+      <span>infer: {(debug.inferenceFps ?? 0).toFixed(1)}fps / {(debug.inferenceMs ?? 0).toFixed(1)}ms</span>
+      {debug.videoWidth && debug.videoHeight ? <span>cam: {debug.videoWidth}x{debug.videoHeight}</span> : null}
+      {flags && <small>{flags}</small>}
+    </aside>
+  );
 }
 
 type SettingsPanelProps = {
@@ -3359,12 +3558,12 @@ function SettingsPanel({
         </div>
       </header>
 
-      <section className="desktopLaunchNote" aria-label="Macアプリ起動">
+      <section className="desktopLaunchNote" aria-label="WKWebView録画ウィンドウ起動">
         <div>
-          <strong>Macアプリで録画する</strong>
-          <p>Electronウィンドウはターミナルから起動します。</p>
+          <strong>WKWebView録画ウィンドウ実験</strong>
+          <p>Safariに近いWebKit環境で、ツールバーなしの録画用ウィンドウを起動します。計測は npm run wk:record:perf です。</p>
         </div>
-        <code>npm run desktop</code>
+        <code>npm run wk:record</code>
       </section>
 
       <section className="section">
