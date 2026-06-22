@@ -1,9 +1,15 @@
 # Reaction images
 
-This folder is reserved for static reaction images if you want to serve them
-from the app. The v1 UI stores uploaded images in browser IndexedDB.
-OBS Browser Source has its own browser storage, so put PNG files here when OBS
-does not see images uploaded from Chrome or Safari.
+This folder is reserved for optional static fallback reaction images.
+
+The settings UI can store uploaded images in the browser. In local development,
+the app also mirrors them to `.reaction-standee/assets/` through the local Vite
+API so Safari, Chrome, WKWebView, and OBS-related views can share the same local
+assets more easily.
+
+GitHub Pages does not have that local API, so the public demo primarily uses the
+browser's own storage for uploaded images. If you want default images to be
+available without uploading them, place PNG files here using the names below.
 
 Recommended filenames:
 
@@ -13,5 +19,5 @@ Recommended filenames:
 - `troubled.png`
 - `explain.png`
 
-Idle motion is handled by CSS animation, so it does not need a separate
-blink or idle image.
+Do not commit private, paid, internal, or rights-uncleared character assets to
+this folder.
