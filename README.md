@@ -8,7 +8,7 @@
 
 ## デモ
 
-GitHub Pagesで公開する想定のWeb版です。
+GitHub Pagesで公開しているWeb版です。
 
 ```text
 https://it-yusha.github.io/reaction-standee/
@@ -107,6 +107,24 @@ https://it-yusha.github.io/reaction-standee/?route=record
 公開版の画像や設定は、基本的にアクセスしたブラウザ内に保存されます。ローカル開発版で使う `.reaction-standee/` の共有ローカル保存やWKWebView録画ウィンドウは、自分のMacでの制作・録画向けの補助機能です。
 
 カメラ映像とマイク音声の扱いは、上記の「プライバシー」も参照してください。
+
+### PWAとして使う
+
+公開版にはWeb App ManifestとService Workerを含めています。Safariでは共有メニューの「Dockに追加」、iPhone/iPadでは「ホーム画面に追加」を使うと、ブラウザの通常タブよりアプリに近い形で起動できます。
+
+PWA化しても、カメラ映像やマイク音声を外部サーバーへ送る構成にはなりません。登録画像と設定は、追加したWebアプリを含む各ブラウザ環境内に保存されます。
+
+初回表示にはネットワーク接続が必要です。一度読み込んだアプリ本体はキャッシュされますが、MediaPipeのモデルなど外部配信リソースを使うため、完全なオフライン動作は現時点では保証していません。
+
+### ローカル版との関係
+
+ローカル版とGitHub Pages版は、別々のアプリではありません。React、カメラトラッキング、MediaPipe、キャラクター表示、ポーズ切替、生命感、口パク、設定画面は同じソースコードを使います。
+
+- ローカル版: ViteのローカルAPIを使い、画像・設定・リアクション状態をSafari、WKWebView、OBSなどで共有します。
+- GitHub Pages版: 静的ホスティングのためローカルAPI通信を行わず、IndexedDBとlocalStorageを使います。
+- PWA: GitHub Pages版を独立したウィンドウやホーム画面から起動しやすくする公開方法です。
+
+環境差は保存・同期層とPWA登録に限定し、表示機能を二重実装しない方針です。設計判断の経緯は [docs/decision-log.md](docs/decision-log.md) に記録しています。
 
 ## v1機能
 

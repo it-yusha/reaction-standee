@@ -44,12 +44,15 @@ https://it-yusha.github.io/reaction-standee/?route=record
 
 - トップURLで設定画面が開く。
 - `?route=record` で録画表示が開く。
-- カメラ許可ダイアログが出る。
+- トラッキングをONにすると、未許可の場合はカメラ許可ダイアログが出る。
 - カメラ許可後、ポーズ認識が動く。
 - 画像登録がブラウザ内でできる。
 - 再読み込み後も登録画像と設定が復元される。
 - 口パクを使う場合、マイク許可後に音声反応が動く。
 - Mac + Safariを推奨環境として確認する。
+- 公開版で `/api/reaction`、`/api/assets`、`/api/settings` への不要な通信が発生しない。
+- Web App ManifestとService Workerが配信される。
+- Safariの「Dockに追加」または対応ブラウザのインストール導線から、PWA表示を起動できる。
 
 ## 5. ポートフォリオ表示
 

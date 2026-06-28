@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:pages": "GITHUB_PAGES=true npm run build",
+    "build:pages": "GITHUB_PAGES=true VITE_DEPLOY_TARGET=static npm run build",
     "desktop": "npm run build && electron electron/main.cjs",
     "desktop:dev": "electron electron/main.cjs --dev",
     "wk:record": "bash scripts/run-wk-record-preview.sh",

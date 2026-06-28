@@ -238,6 +238,8 @@ const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const SHARED_ASSETS_URL = "/api/assets";
 const SHARED_SETTINGS_URL = "/api/settings";
 const publicAssetUrl = (assetPath: string) => `${import.meta.env.BASE_URL}${assetPath.replace(/^\/+/, "")}`;
+const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
+const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
 const AVATAR_SYNC_INTERVAL_MS = 50;
 const LIP_SYNC_CALIBRATION_WARMUP_MS = 350;
 const LIP_SYNC_CALIBRATION_MS = 1250;
@@ -403,6 +405,7 @@ function readSettings(): Settings {
 }
 
 async function readSharedStoredSettingsPayload(): Promise<SharedStoredSettingsPayload | undefined> {
+  if (!localApiEnabled) return undefined;
   try {
     const response = await fetch(SHARED_SETTINGS_URL, { cache: "no-store" });
     if (!response.ok) return undefined;
@@ -413,6 +416,7 @@ async function readSharedStoredSettingsPayload(): Promise<SharedStoredSettingsPa
 }
 
 async function saveSharedStoredSettings(settings: StoredSettings) {
+  if (!localApiEnabled) return;
   try {
     await fetch(SHARED_SETTINGS_URL, {
       method: "PUT",
@@ -571,6 +575,7 @@ function openImageDb(): Promise<IDBDatabase> {
 }
 
 async function readSharedAssetMap(): Promise<Record<string, string>> {
+  if (!localApiEnabled) return {};
   try {
     const response = await fetch(SHARED_ASSETS_URL, { cache: "no-store" });
     if (!response.ok) return {};
@@ -582,6 +587,7 @@ async function readSharedAssetMap(): Promise<Record<string, string>> {
 }
 
 async function saveSharedAsset(key: ImageDbKey, dataUrl: string) {
+  if (!localApiEnabled) return;
   try {
     await fetch(`${SHARED_ASSETS_URL}/${encodeURIComponent(key)}`, {
       method: "PUT",
@@ -594,6 +600,7 @@ async function saveSharedAsset(key: ImageDbKey, dataUrl: string) {
 }
 
 async function deleteSharedAsset(key: ImageDbKey) {
+  if (!localApiEnabled) return;
   try {
     await fetch(`${SHARED_ASSETS_URL}/${encodeURIComponent(key)}`, { method: "DELETE" });
   } catch {
@@ -833,10 +840,12 @@ async function deleteImageFromDb(key: ImageDbKey) {
 }
 
 async function clearReactionImages() {
-  try {
-    await fetch(SHARED_ASSETS_URL, { method: "DELETE" });
-  } catch {
-    // Shared local storage is best-effort; IndexedDB remains a fallback.
+  if (localApiEnabled) {
+    try {
+      await fetch(SHARED_ASSETS_URL, { method: "DELETE" });
+    } catch {
+      // Shared local storage is best-effort; IndexedDB remains a fallback.
+    }
   }
   if (!("indexedDB" in window)) return;
   const db = await openImageDb();
@@ -858,6 +867,7 @@ async function publishSharedState(
   cameraFollow: CameraFollow,
   settings?: Settings,
 ) {
+  if (!localApiEnabled) return;
   const body: {
     reaction: Reaction;
     mouthShape: MouthShape;
@@ -877,6 +887,7 @@ async function publishSharedState(
 }
 
 async function readSharedReaction(): Promise<SharedReactionPayload | undefined> {
+  if (!localApiEnabled) return undefined;
   const response = await fetch(`${SHARED_REACTION_URL}?t=${Date.now()}`, { cache: "no-store" });
   if (!response.ok) return undefined;
   const payload = (await response.json()) as Partial<SharedReactionPayload>;
@@ -1019,7 +1030,7 @@ function App() {
   }, [route, updateSettings]);
 
   useEffect(() => {
-    if (route === "settings") return;
+    if (route === "settings" || !localApiEnabled) return;
     let cancelled = false;
 
     const syncSharedSettings = () => {
@@ -1100,7 +1111,7 @@ function App() {
   }, [cameraFollow, mouthShape, reaction, route]);
 
   useEffect(() => {
-    if (route !== "avatar") return;
+    if (route !== "avatar" || !localApiEnabled) return;
     let cancelled = false;
     let lastUpdatedAt = 0;
     let fallbackInterval = 0;
@@ -4301,6 +4312,12 @@ class AppErrorBoundary extends React.Component<{ children: ReactNode }, AppError
 
     return this.props.children;
   }
+}
+
+if (pwaEnabled && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register(publicAssetUrl("sw.js"), { scope: import.meta.env.BASE_URL }).catch(() => undefined);
+  });
 }
 
 createRoot(document.getElementById("root")!).render(
