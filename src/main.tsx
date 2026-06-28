@@ -252,6 +252,7 @@ const LIP_SYNC_CALIBRATION_WARMUP_MS = 350;
 const LIP_SYNC_CALIBRATION_MS = 1250;
 const LIP_SYNC_START_HOLD_MS = 70;
 const LIP_SYNC_END_HOLD_MS = 260;
+const LIP_SYNC_MAX_SPEECH_MS = 5000;
 const LIP_SYNC_MIN_SHAPE_HOLD_MS = 90;
 const LIP_SYNC_NOISE_MARGIN_MIN = 1.2;
 const LIP_SYNC_NOISE_MARGIN_RATIO = 0.035;
@@ -705,7 +706,12 @@ async function importAppBackup(file: File) {
       .map(([key, dataUrl]) => saveImageToDb(key, dataUrl)),
   );
 
-  const restoredSettings = { ...toStoredSettings(defaultSettings), ...parsed.settings };
+  const restoredSettings = {
+    ...toStoredSettings(defaultSettings),
+    ...parsed.settings,
+    selectedDeviceId: "",
+    selectedAudioDeviceId: "",
+  };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(restoredSettings));
   await saveSharedStoredSettings(restoredSettings);
 }
@@ -974,8 +980,11 @@ function getAppRoute(): AppRoute {
   return "settings";
 }
 
-function getAppRouteHref(route: Exclude<AppRoute, "settings">) {
+function getAppRouteHref(route: AppRoute) {
   const baseUrl = import.meta.env.BASE_URL;
+  if (route === "settings") {
+    return baseUrl && baseUrl !== "/" ? baseUrl : "/settings";
+  }
   if (baseUrl && baseUrl !== "/") return `${baseUrl}?route=${route}`;
   return `/${route}`;
 }
@@ -1013,7 +1022,7 @@ function getPerfClassName(options: PerfOptions) {
 }
 
 function App() {
-  const route = getAppRoute();
+  const [route, setRoute] = useState<AppRoute>(() => getAppRoute());
   const perfOptions = readPerfOptions();
   const [settings, setSettings] = useState<Settings>(() => readSettings());
   const [reaction, setReaction] = useState<Reaction>("normal");
@@ -1062,16 +1071,27 @@ function App() {
     setSettings((current) => ({ ...current, ...patch }));
   }, []);
 
+  const navigateToRoute = useCallback((nextRoute: AppRoute) => {
+    window.history.pushState(null, "", getAppRouteHref(nextRoute));
+    setRoute(nextRoute);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(getAppRoute());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
   useEffect(() => {
     if (!pwaEnabled || route === "settings") return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        window.location.assign(import.meta.env.BASE_URL);
+        navigateToRoute("settings");
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [route]);
+  }, [navigateToRoute, route]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1339,6 +1359,7 @@ function App() {
           onManualGaze={handleManualGaze}
           onManualMouth={handleManualMouth}
           onManualReaction={setReaction}
+          onNavigate={navigateToRoute}
           reaction={reaction}
           settings={settings}
         />
@@ -1597,6 +1618,7 @@ function useLipSyncAudio({
   const mouthShapeRef = useRef<MouthShape>("closed");
   const speakingRef = useRef(false);
   const speechStartRef = useRef(0);
+  const speakingStartedAtRef = useRef(0);
   const quietStartRef = useRef(0);
   const lastSwitchRef = useRef(0);
   const nextRhythmAtRef = useRef(0);
@@ -1617,6 +1639,7 @@ function useLipSyncAudio({
       mouthShapeRef.current = "closed";
       speakingRef.current = false;
       speechStartRef.current = 0;
+      speakingStartedAtRef.current = 0;
       quietStartRef.current = 0;
       nextRhythmAtRef.current = 0;
       rhythmStepRef.current = 0;
@@ -1733,6 +1756,7 @@ function useLipSyncAudio({
               }
               if (now - speechStartRef.current >= LIP_SYNC_START_HOLD_MS) {
                 speakingRef.current = true;
+                speakingStartedAtRef.current = now;
                 quietStartRef.current = 0;
                 nextRhythmAtRef.current = 0;
               }
@@ -1740,12 +1764,20 @@ function useLipSyncAudio({
               speechStartRef.current = 0;
               quietStartRef.current = 0;
             }
+          } else if (now - speakingStartedAtRef.current >= LIP_SYNC_MAX_SPEECH_MS) {
+            speakingRef.current = false;
+            speakingStartedAtRef.current = 0;
+            speechStartRef.current = 0;
+            quietStartRef.current = 0;
+            nextRhythmAtRef.current = 0;
+            noiseFloorRef.current = Math.max(noiseFloorRef.current, smoothedLevel - startDelta * 0.5);
           } else if (speechLevel < stopDelta) {
             if (!quietStartRef.current) {
               quietStartRef.current = now;
             }
             if (now - quietStartRef.current >= LIP_SYNC_END_HOLD_MS) {
               speakingRef.current = false;
+              speakingStartedAtRef.current = 0;
               speechStartRef.current = 0;
               quietStartRef.current = 0;
               nextRhythmAtRef.current = 0;
@@ -3409,6 +3441,7 @@ type SettingsPanelProps = {
   onManualGaze: (direction: EyeImageSlot) => void;
   onManualMouth: (mouthShape: MouthShape) => void;
   onManualReaction: (reaction: Reaction) => void;
+  onNavigate: (route: AppRoute) => void;
 };
 
 function SettingsPanel({
@@ -3428,6 +3461,7 @@ function SettingsPanel({
   onManualGaze,
   onManualMouth,
   onManualReaction,
+  onNavigate,
 }: SettingsPanelProps) {
   const [imageMessage, setImageMessage] = useState("");
   const lifeMode = getLifeMode(settings);
@@ -3675,7 +3709,20 @@ function SettingsPanel({
           <p>ポーズで立ち絵リアクションを呼び出す</p>
         </div>
         <div className="headerLinks">
-          <a className="avatarLink" href={getAppRouteHref("record")} target={pwaEnabled ? undefined : "_blank"} rel="noreferrer">
+          <a
+            className="avatarLink"
+            href={getAppRouteHref("record")}
+            target={pwaEnabled ? undefined : "_blank"}
+            rel="noreferrer"
+            onClick={
+              pwaEnabled
+                ? (event) => {
+                    event.preventDefault();
+                    onNavigate("record");
+                  }
+                : undefined
+            }
+          >
             録画表示
           </a>
           {localApiEnabled && (
