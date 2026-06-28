@@ -1090,6 +1090,17 @@ input[type="range"] {
   margin-top: 10px;
 }
 
+.backupActions {
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 12px;
+}
+
+.backupActions button,
+.backupActions .filePicker {
+  min-height: 38px;
+  font-size: 12px;
+}
+
 .filePicker {
   position: relative;
   display: inline-flex;

@@ -14,7 +14,7 @@ let settingsUpdatedAt = Date.now();
 let sharedSettings = {
   avatarSize: 620,
   avatarX: 0,
-  avatarY: 0,
+  avatarY: 80,
   outlineEnabled: true,
   outlineWidth: 3,
   outlineQuality: "standard",

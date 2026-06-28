@@ -182,6 +182,13 @@ type SharedStoredSettingsPayload = {
   updatedAt?: number;
 };
 
+type AppBackup = {
+  version: 1;
+  exportedAt: string;
+  settings: StoredSettings;
+  assets: Record<string, string>;
+};
+
 type SharedAvatarSettings = Pick<
   Settings,
   | "avatarSize"
@@ -344,7 +351,7 @@ const defaultSettings: Settings = {
   y: 80,
   avatarSize: 620,
   avatarX: 0,
-  avatarY: 0,
+  avatarY: 80,
   outlineEnabled: true,
   outlineWidth: 3,
   outlineQuality: "standard",
@@ -647,6 +654,60 @@ function assetMapFromImageSettings(
     if (dataUrl) assets[MOUTH_IMAGE_KEYS[key]] = dataUrl;
   });
   return assets;
+}
+
+function isAppBackup(value: unknown): value is AppBackup {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<AppBackup>;
+  return candidate.version === 1 && Boolean(candidate.settings) && typeof candidate.settings === "object" && Boolean(candidate.assets) && typeof candidate.assets === "object";
+}
+
+function getBackupAssetKeys() {
+  return new Set([
+    ...imageSlots.map(({ key }) => key),
+    BACKGROUND_IMAGE_KEY,
+    NORMAL_BLINK_IMAGE_KEY,
+    ...eyeImageSlots.map(({ key }) => EYE_IMAGE_KEYS[key]),
+    ...mouthImageSlots.map(({ key }) => MOUTH_IMAGE_KEYS[key]),
+  ]);
+}
+
+async function exportAppBackup(settings: Settings) {
+  const imageSettings = await loadStoredImageSettings();
+  const backup: AppBackup = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    settings: toStoredSettings(settings),
+    assets: assetMapFromImageSettings(imageSettings),
+  };
+  const blob = new Blob([JSON.stringify(backup)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  anchor.href = url;
+  anchor.download = `reaction-standee-backup-${date}.json`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importAppBackup(file: File) {
+  const parsed = JSON.parse(await file.text()) as unknown;
+  if (!isAppBackup(parsed)) {
+    throw new Error("対応していないバックアップ形式です。");
+  }
+
+  const allowedKeys = getBackupAssetKeys();
+  await Promise.all(
+    Object.entries(parsed.assets)
+      .filter(([key, dataUrl]) => allowedKeys.has(key) && typeof dataUrl === "string" && dataUrl.startsWith("data:image/"))
+      .map(([key, dataUrl]) => saveImageToDb(key, dataUrl)),
+  );
+
+  const restoredSettings = { ...toStoredSettings(defaultSettings), ...parsed.settings };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(restoredSettings));
+  await saveSharedStoredSettings(restoredSettings);
 }
 
 async function migrateIndexedDbImagesToSharedAssets(
@@ -1000,6 +1061,17 @@ function App() {
   const updateSettings = useCallback((patch: Partial<Settings>) => {
     setSettings((current) => ({ ...current, ...patch }));
   }, []);
+
+  useEffect(() => {
+    if (!pwaEnabled || route === "settings") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        window.location.assign(import.meta.env.BASE_URL);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [route]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3408,6 +3480,32 @@ function SettingsPanel({
       });
   };
 
+  const handleExportBackup = () => {
+    setImageMessage("設定と画像を書き出しています...");
+    void exportAppBackup(settings)
+      .then(() => {
+        setImageMessage("設定と画像を書き出しました。");
+      })
+      .catch((error) => {
+        setImageMessage("設定データの書き出しに失敗しました。");
+        console.error(error);
+      });
+  };
+
+  const handleImportBackup = (file: File | undefined) => {
+    if (!file) return;
+    setImageMessage(`${file.name} を読み込んでいます...`);
+    void importAppBackup(file)
+      .then(() => {
+        setImageMessage("設定と画像を読み込みました。画面を更新します。");
+        window.location.reload();
+      })
+      .catch((error) => {
+        setImageMessage(error instanceof Error ? error.message : "設定データの読み込みに失敗しました。");
+        console.error(error);
+      });
+  };
+
   const handleDeleteImage = (slot: ImageSlot, label: string) => {
     void deleteReactionImage(slot)
       .then(() => {
@@ -3577,22 +3675,26 @@ function SettingsPanel({
           <p>ポーズで立ち絵リアクションを呼び出す</p>
         </div>
         <div className="headerLinks">
-          <a className="avatarLink" href={getAppRouteHref("record")} target="_blank" rel="noreferrer">
+          <a className="avatarLink" href={getAppRouteHref("record")} target={pwaEnabled ? undefined : "_blank"} rel="noreferrer">
             録画表示
           </a>
-          <a className="avatarLink" href={getAppRouteHref("canvas")} target="_blank" rel="noreferrer">
-            Canvas実験
-          </a>
+          {localApiEnabled && (
+            <a className="avatarLink" href={getAppRouteHref("canvas")} target="_blank" rel="noreferrer">
+              Canvas実験
+            </a>
+          )}
         </div>
       </header>
 
-      <section className="desktopLaunchNote" aria-label="WKWebView録画ウィンドウ起動">
-        <div>
-          <strong>WKWebView録画ウィンドウ実験</strong>
-          <p>Safariに近いWebKit環境で、ツールバーなしの録画用ウィンドウを起動します。計測は npm run wk:record:perf です。</p>
-        </div>
-        <code>npm run wk:record</code>
-      </section>
+      {localApiEnabled && (
+        <section className="desktopLaunchNote" aria-label="WKWebView録画ウィンドウ起動">
+          <div>
+            <strong>WKWebView録画ウィンドウ実験</strong>
+            <p>Safariに近いWebKit環境で、ツールバーなしの録画用ウィンドウを起動します。計測は npm run wk:record:perf です。</p>
+          </div>
+          <code>npm run wk:record</code>
+        </section>
+      )}
 
       <section className="section">
         <h2>トラッキング</h2>
@@ -3644,6 +3746,24 @@ function SettingsPanel({
       <section className="section">
         <h2>画像</h2>
         <p className="hint">透過済みPNGをそのまま登録します。背景抜きは外部の画像編集アプリで行ってください。</p>
+        <div className="fileActions backupActions">
+          <button type="button" onClick={handleExportBackup}>
+            設定一式を書き出す
+          </button>
+          <label className="filePicker">
+            設定一式を読み込む
+            <input
+              type="file"
+              accept="application/json,.json"
+              onClick={(event) => {
+                event.currentTarget.value = "";
+              }}
+              onChange={(event) => {
+                handleImportBackup(event.target.files?.[0]);
+              }}
+            />
+          </label>
+        </div>
         <button type="button" className="danger" onClick={handleClearImages}>
           画像をすべてクリア
         </button>
@@ -4018,9 +4138,9 @@ function SettingsPanel({
         <Range label="サイズ" min={180} max={1300} step={10} value={settings.size} onChange={(size) => onChange({ size })} />
         <Range label="位置 X" min={-900} max={900} step={5} value={settings.x} onChange={(x) => onChange({ x })} />
         <Range label="位置 Y" min={-520} max={520} step={5} value={settings.y} onChange={(y) => onChange({ y })} />
-        <p className="hint">/avatar OBS表示</p>
+        <p className="hint">録画表示（/record・Dockアプリ・WKWebView）</p>
         <Range
-          label="OBSサイズ"
+          label="録画表示サイズ"
           min={180}
           max={1300}
           step={10}
@@ -4028,7 +4148,7 @@ function SettingsPanel({
           onChange={(avatarSize) => onChange({ avatarSize })}
         />
         <Range
-          label="OBS位置 X"
+          label="録画表示位置 X"
           min={-900}
           max={900}
           step={5}
@@ -4036,7 +4156,7 @@ function SettingsPanel({
           onChange={(avatarX) => onChange({ avatarX })}
         />
         <Range
-          label="OBS位置 Y"
+          label="録画表示位置 Y"
           min={-520}
           max={520}
           step={5}

@@ -54,9 +54,9 @@ https://it-yusha.github.io/reaction-standee/?route=record
 - Web App ManifestとService Workerが配信される。
 - Safariの「Dockに追加」または対応ブラウザのインストール導線から、PWA表示を起動できる。
 
-## 5. ポートフォリオ表示
+## 5. 公開ページ表示
 
 - README冒頭にスクリーンショット、GIF、または短いデモ動画を追加する。
 - READMEからGitHub Pagesデモへ移動できる。
 - READMEから判断ログ `docs/decision-log.md` へ移動できる。
-- 採用担当者が見ても、何を作り、何を工夫し、どう動くかが冒頭で分かる。
+- 初めて見る人が、何ができて、どう試すかを冒頭で理解できる。
