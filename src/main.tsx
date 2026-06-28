@@ -1182,8 +1182,24 @@ function App() {
     void navigator.mediaDevices
       .enumerateDevices()
       .then((deviceList) => {
-        setDevices(deviceList.filter((device) => device.kind === "videoinput"));
-        setAudioDevices(deviceList.filter((device) => device.kind === "audioinput"));
+        const videoDevices = deviceList.filter((device) => device.kind === "videoinput");
+        const nextAudioDevices = deviceList.filter((device) => device.kind === "audioinput");
+        setDevices(videoDevices);
+        setAudioDevices(nextAudioDevices);
+        setSettings((current) => {
+          const selectedDeviceId =
+            current.selectedDeviceId && !videoDevices.some((device) => device.deviceId === current.selectedDeviceId)
+              ? ""
+              : current.selectedDeviceId;
+          const selectedAudioDeviceId =
+            current.selectedAudioDeviceId && !nextAudioDevices.some((device) => device.deviceId === current.selectedAudioDeviceId)
+              ? ""
+              : current.selectedAudioDeviceId;
+          if (selectedDeviceId === current.selectedDeviceId && selectedAudioDeviceId === current.selectedAudioDeviceId) {
+            return current;
+          }
+          return { ...current, selectedDeviceId, selectedAudioDeviceId };
+        });
       })
       .catch(() => undefined);
   }, []);
