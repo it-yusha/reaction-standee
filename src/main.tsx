@@ -237,6 +237,7 @@ const SHARED_REACTION_URL = "/api/reaction";
 const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const SHARED_ASSETS_URL = "/api/assets";
 const SHARED_SETTINGS_URL = "/api/settings";
+const publicAssetUrl = (assetPath: string) => `${import.meta.env.BASE_URL}${assetPath.replace(/^\/+/, "")}`;
 const AVATAR_SYNC_INTERVAL_MS = 50;
 const LIP_SYNC_CALIBRATION_WARMUP_MS = 350;
 const LIP_SYNC_CALIBRATION_MS = 1250;
@@ -2216,7 +2217,7 @@ async function drawRecordingReactionEffects(
 
   if (reaction === "joy") {
     try {
-      const asset = await loadCanvasImage("/effects/joy-sparkle-field.svg", imageCache);
+      const asset = await loadCanvasImage(publicAssetUrl("effects/joy-sparkle-field.svg"), imageCache);
       ctx.save();
       ctx.globalAlpha = Math.min(1, alpha + 0.08);
       ctx.drawImage(asset, effectX, effectY, effectWidth, effectHeight);
@@ -2232,7 +2233,7 @@ async function drawRecordingReactionEffects(
 
   if (reaction === "surprised") {
     try {
-      const asset = await loadCanvasImage("/effects/surprised-shockwave.svg", imageCache);
+      const asset = await loadCanvasImage(publicAssetUrl("effects/surprised-shockwave.svg"), imageCache);
       ctx.save();
       ctx.globalAlpha = Math.min(1, alpha + 0.12);
       ctx.drawImage(asset, effectX, effectY, effectWidth, effectHeight);
@@ -2262,7 +2263,7 @@ async function drawRecordingReactionEffects(
 
   if (reaction === "explain") {
     try {
-      const asset = await loadCanvasImage("/effects/explain-pointer-light.svg", imageCache);
+      const asset = await loadCanvasImage(publicAssetUrl("effects/explain-pointer-light.svg"), imageCache);
       ctx.save();
       ctx.globalAlpha = Math.min(1, alpha + 0.16);
       ctx.drawImage(asset, effectX - effectWidth * 0.04, effectY + effectHeight * 0.04, effectWidth, effectHeight);
@@ -2301,7 +2302,7 @@ async function drawRecordingFrame(
     }
   }
 
-  const primarySrc = settings.images[reaction] ?? `/reactions/${reaction}.png`;
+  const primarySrc = settings.images[reaction] ?? publicAssetUrl(`reactions/${reaction}.png`);
   let primaryImage: HTMLImageElement;
   try {
     primaryImage = await loadCanvasImage(primarySrc, imageCache);
@@ -2965,7 +2966,7 @@ function AvatarStage({
   const size = useAvatarLayout ? settings.avatarSize : settings.size;
   const x = useAvatarLayout ? settings.avatarX : settings.x;
   const y = useAvatarLayout ? settings.avatarY : settings.y;
-  const staticImage = `/reactions/${reaction}.png`;
+  const staticImage = publicAssetUrl(`reactions/${reaction}.png`);
   const frameBackground = perfOptions.noBackground ? "#090d14" : getFrameBackground(settings);
   const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
 
@@ -3172,7 +3173,7 @@ function ReactionEffects({ disabled, reaction }: { disabled: boolean; reaction: 
   if (reaction === "joy") {
     return (
       <div className="effectLayer joyFx" aria-hidden="true">
-        <img className="effectAsset joyAsset" src="/effects/joy-sparkle-field.svg" alt="" draggable={false} />
+        <img className="effectAsset joyAsset" src={publicAssetUrl("effects/joy-sparkle-field.svg")} alt="" draggable={false} />
         <span className="jumpShadow" />
         <i />
         <i />
@@ -3183,7 +3184,12 @@ function ReactionEffects({ disabled, reaction }: { disabled: boolean; reaction: 
   if (reaction === "surprised") {
     return (
       <div className="effectLayer surprisedFx" aria-hidden="true">
-        <img className="effectAsset surprisedAsset" src="/effects/surprised-shockwave.svg" alt="" draggable={false} />
+        <img
+          className="effectAsset surprisedAsset"
+          src={publicAssetUrl("effects/surprised-shockwave.svg")}
+          alt=""
+          draggable={false}
+        />
       </div>
     );
   }
@@ -3195,7 +3201,12 @@ function ReactionEffects({ disabled, reaction }: { disabled: boolean; reaction: 
   if (reaction === "explain") {
     return (
       <div className="effectLayer explainFx" aria-hidden="true">
-        <img className="effectAsset explainAsset" src="/effects/explain-pointer-light.svg" alt="" draggable={false} />
+        <img
+          className="effectAsset explainAsset"
+          src={publicAssetUrl("effects/explain-pointer-light.svg")}
+          alt=""
+          draggable={false}
+        />
         <span className="explainGlow" />
         <span className="pointerBeam" />
       </div>
