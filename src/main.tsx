@@ -35,6 +35,11 @@ type CropRect = {
   height: number;
 };
 
+type PreloadedAvatarImage = {
+  image: HTMLImageElement;
+  ready: Promise<boolean>;
+};
+
 type BlinkCrop = CropRect;
 type MouthCrop = CropRect;
 
@@ -260,6 +265,7 @@ const bundledDemoBlinkCrop: BlinkCrop = { x: 39, y: 20, width: 25, height: 10 };
 const bundledDemoEyeCrop: BlinkCrop = { x: 37, y: 18, width: 31, height: 15 };
 const bundledDemoMouthCrop: MouthCrop = { x: 45, y: 29, width: 12, height: 6 };
 const bundledDemoRightEyeMatte: CropRect = { x: 53.27, y: 23.44, width: 4.63, height: 5.26 };
+const avatarImagePreloadCache = new Map<string, PreloadedAvatarImage>();
 const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
 const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -419,6 +425,29 @@ const defaultSettings: Settings = {
 
 function usesBundledDemoNormal(settings: Settings) {
   return !settings.images.normal;
+}
+
+function preloadAvatarImage(source: string): PreloadedAvatarImage {
+  const cached = avatarImagePreloadCache.get(source);
+  if (cached) return cached;
+
+  const image = new Image();
+  image.decoding = "async";
+  image.fetchPriority = "high";
+  const ready = new Promise<boolean>((resolve) => {
+    image.onload = () => {
+      void image
+        .decode()
+        .catch(() => undefined)
+        .then(() => resolve(true));
+    };
+    image.onerror = () => resolve(false);
+  });
+  image.src = source;
+
+  const entry = { image, ready };
+  avatarImagePreloadCache.set(source, entry);
+  return entry;
 }
 
 function getActiveBlinkCrop(settings: Settings) {
@@ -3347,14 +3376,14 @@ function AvatarImage({
     if (displayedSrc === src) return undefined;
 
     let cancelled = false;
-    const nextImage = new Image();
-    nextImage.onload = () => {
-      if (!cancelled) setDisplayedSrc(src);
-    };
-    nextImage.onerror = () => {
-      if (!cancelled) setFailedSrc(src);
-    };
-    nextImage.src = src;
+    void preloadAvatarImage(src).ready.then((loaded) => {
+      if (cancelled) return;
+      if (loaded) {
+        setDisplayedSrc(src);
+      } else {
+        setFailedSrc(src);
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -3566,9 +3595,9 @@ function getRuntimeLabel() {
 }
 
 function usePreloadAvatarImages(settings: Settings) {
-  useEffect(() => {
+  const sources = useMemo(() => {
     const displaySettings = withBundledDemoOverlays(settings);
-    const sources = new Set<string>(
+    const nextSources = new Set<string>(
       reactions.map(({ key }) => settings.images[key] ?? publicAssetUrl(`reactions/${key}.png`)),
     );
 
@@ -3579,24 +3608,31 @@ function usePreloadAvatarImages(settings: Settings) {
       displaySettings.mouthImages.smallOpen,
       displaySettings.mouthImages.wideOpen,
     ].forEach((source) => {
-      if (source) sources.add(source);
+      if (source) nextSources.add(source);
+    });
+    return nextSources;
+  }, [
+    settings.eyeImages.lookLeft,
+    settings.eyeImages.lookRight,
+    settings.images.explain,
+    settings.images.joy,
+    settings.images.normal,
+    settings.images.surprised,
+    settings.images.troubled,
+    settings.mouthImages.smallOpen,
+    settings.mouthImages.wideOpen,
+    settings.normalBlinkImage,
+  ]);
+
+  useEffect(() => {
+    sources.forEach((source) => {
+      void preloadAvatarImage(source).ready;
     });
 
-    const preloadedImages = [...sources].map((source) => {
-      const image = new Image();
-      image.decoding = "async";
-      image.src = source;
-      void image.decode().catch(() => undefined);
-      return image;
+    avatarImagePreloadCache.forEach((_entry, source) => {
+      if (!sources.has(source)) avatarImagePreloadCache.delete(source);
     });
-
-    return () => {
-      preloadedImages.forEach((image) => {
-        image.onload = null;
-        image.onerror = null;
-      });
-    };
-  }, [settings]);
+  }, [sources]);
 }
 
 function PerfOverlay({ debug, options, route }: { debug: TrackingDebug; options: PerfOptions; route: AppRoute }) {
