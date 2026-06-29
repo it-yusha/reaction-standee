@@ -1061,6 +1061,7 @@ input[type="range"] {
 }
 
 .fileSlot .savedBadge,
+.fileSlot .demoBadge,
 .fileSlot .emptyBadge {
   display: inline-flex;
   width: fit-content;
@@ -1077,9 +1078,19 @@ input[type="range"] {
   background: rgba(88, 196, 167, 0.22);
 }
 
+.fileSlot .demoBadge {
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.2);
+}
+
 .fileSlot .emptyBadge {
   color: #c5d0df;
   background: rgba(255, 255, 255, 0.08);
+}
+
+.range input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .demoAssetNotice {

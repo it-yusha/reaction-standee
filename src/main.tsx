@@ -256,6 +256,9 @@ const bundledDemoAssets = {
     wideOpen: "reactions/mouth_wide_open.png",
   },
 } as const;
+const bundledDemoBlinkCrop: BlinkCrop = { x: 39, y: 20, width: 25, height: 10 };
+const bundledDemoEyeCrop: BlinkCrop = { x: 39, y: 20, width: 25, height: 10 };
+const bundledDemoMouthCrop: MouthCrop = { x: 45, y: 29, width: 12, height: 6 };
 const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
 const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -415,6 +418,18 @@ const defaultSettings: Settings = {
 
 function usesBundledDemoNormal(settings: Settings) {
   return !settings.images.normal;
+}
+
+function getActiveBlinkCrop(settings: Settings) {
+  return usesBundledDemoNormal(settings) ? bundledDemoBlinkCrop : settings.blinkCrop;
+}
+
+function getActiveEyeCrop(settings: Settings) {
+  return usesBundledDemoNormal(settings) ? bundledDemoEyeCrop : getEyeCrop(settings.blinkCrop);
+}
+
+function getActiveMouthCrop(settings: Settings) {
+  return usesBundledDemoNormal(settings) ? bundledDemoMouthCrop : settings.mouthCrop;
 }
 
 function withBundledDemoOverlays(settings: Settings): Settings {
@@ -2477,6 +2492,9 @@ async function drawRecordingFrame(
   metrics: RecordingFrameMetrics,
 ) {
   const displaySettings = withBundledDemoOverlays(settings);
+  const activeBlinkCrop = getActiveBlinkCrop(settings);
+  const activeEyeCrop = getActiveEyeCrop(settings);
+  const activeMouthCrop = getActiveMouthCrop(settings);
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
 
@@ -2525,7 +2543,7 @@ async function drawRecordingFrame(
     settings.outlineQuality ?? "standard",
   );
 
-  if (reaction === "normal" && isValidBlinkCrop(settings.blinkCrop)) {
+  if (reaction === "normal" && isValidBlinkCrop(activeBlinkCrop)) {
     const eyeOverlaySrc =
       visualState.isBlinking && settings.blinkEnabled
         ? displaySettings.normalBlinkImage
@@ -2536,7 +2554,8 @@ async function drawRecordingFrame(
     if (eyeOverlaySrc) {
       try {
         const eyeOverlayImage = await loadCanvasImage(eyeOverlaySrc, imageCache);
-        drawCroppedOverlay(ctx, eyeOverlayImage, getEyeCrop(settings.blinkCrop), {
+        const eyeCrop = visualState.isBlinking ? activeBlinkCrop : activeEyeCrop;
+        drawCroppedOverlay(ctx, eyeOverlayImage, eyeCrop, {
           x: avatarX,
           y: avatarY,
           width: avatarWidth,
@@ -2548,12 +2567,12 @@ async function drawRecordingFrame(
     }
   }
 
-  if (reaction === "normal" && settings.lipSyncEnabled && mouthShape !== "closed" && isValidMouthCrop(settings.mouthCrop)) {
+  if (reaction === "normal" && settings.lipSyncEnabled && mouthShape !== "closed" && isValidMouthCrop(activeMouthCrop)) {
     const mouthOverlaySrc = getMouthOverlaySrc(mouthShape, displaySettings.mouthImages);
     if (mouthOverlaySrc) {
       try {
         const mouthOverlayImage = await loadCanvasImage(mouthOverlaySrc, imageCache);
-        drawCroppedOverlay(ctx, mouthOverlayImage, settings.mouthCrop, {
+        drawCroppedOverlay(ctx, mouthOverlayImage, activeMouthCrop, {
           x: avatarX,
           y: avatarY,
           width: avatarWidth,
@@ -3140,7 +3159,11 @@ function AvatarStage({
   settings: Settings;
   perfOptions: PerfOptions;
 }) {
+  usePreloadAvatarImages(settings);
   const displaySettings = useMemo(() => withBundledDemoOverlays(settings), [settings]);
+  const activeBlinkCrop = getActiveBlinkCrop(settings);
+  const activeEyeCrop = getActiveEyeCrop(settings);
+  const activeMouthCrop = getActiveMouthCrop(settings);
   const isBlinking = useNormalBlink(reaction, displaySettings, manualBlinkSignal);
   const eyeDirection = useIdleGaze(reaction, displaySettings, manualGazeRequest, cameraFollow);
   const [reactionStartedAt, setReactionStartedAt] = useState(() => performance.now());
@@ -3151,7 +3174,7 @@ function AvatarStage({
     reaction === "normal" &&
     isBlinking &&
     Boolean(displaySettings.normalBlinkImage) &&
-    isValidBlinkCrop(settings.blinkCrop);
+    isValidBlinkCrop(activeBlinkCrop);
   const showBlinkGuide =
     route === "settings" &&
     reaction === "normal" &&
@@ -3162,7 +3185,7 @@ function AvatarStage({
     reaction === "normal" && !isBlinking && settings.gazeEnabled
       ? getEyeOverlaySrc(eyeDirection, displaySettings.eyeImages)
       : undefined;
-  const showEyeOverlay = !perfOptions.noOverlays && Boolean(eyeOverlaySrc) && isValidBlinkCrop(settings.blinkCrop);
+  const showEyeOverlay = !perfOptions.noOverlays && Boolean(eyeOverlaySrc) && isValidBlinkCrop(activeEyeCrop);
   const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, displaySettings.mouthImages) : undefined;
   const showMouthOverlay =
     reaction === "normal" &&
@@ -3170,7 +3193,7 @@ function AvatarStage({
     settings.lipSyncEnabled &&
     mouthShape !== "closed" &&
     Boolean(mouthOverlaySrc) &&
-    isValidMouthCrop(settings.mouthCrop);
+    isValidMouthCrop(activeMouthCrop);
   const showMouthGuide = route === "settings" && reaction === "normal" && settings.adjustmentGuidesEnabled && settings.lipSyncEnabled;
   const label = reactions.find((item) => item.key === reaction)?.label ?? reaction;
   const useAvatarLayout = route !== "settings";
@@ -3187,7 +3210,7 @@ function AvatarStage({
     eyeDirection,
     onGazeDebug,
     reaction,
-    settings.blinkCrop,
+    activeBlinkCrop,
     displaySettings.eyeImages.lookLeft,
     displaySettings.eyeImages.lookRight,
     settings.gazeEnabled,
@@ -3230,10 +3253,11 @@ function AvatarStage({
               <div className={`avatarTalkLayer${reaction === "normal" && settings.lifeEnabled && settings.speechMotionEnabled && mouthShape !== "closed" ? " speaking" : ""}`}>
                 <AvatarImage
                   alt={label}
-                  blinkCrop={settings.blinkCrop}
+                  blinkCrop={activeBlinkCrop}
                   blinkOverlaySrc={reaction === "normal" ? displaySettings.normalBlinkImage : undefined}
+                  eyeCrop={activeEyeCrop}
                   eyeOverlaySrc={eyeOverlaySrc}
-                  mouthCrop={settings.mouthCrop}
+                  mouthCrop={activeMouthCrop}
                   mouthOverlaySrc={mouthOverlaySrc}
                   outlineQuality={settings.outlineQuality ?? "standard"}
                   outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
@@ -3259,6 +3283,7 @@ function AvatarImage({
   alt,
   blinkCrop,
   blinkOverlaySrc,
+  eyeCrop,
   eyeOverlaySrc,
   mouthCrop,
   mouthOverlaySrc,
@@ -3276,6 +3301,7 @@ function AvatarImage({
   alt: string;
   blinkCrop: BlinkCrop;
   blinkOverlaySrc: string | undefined;
+  eyeCrop: BlinkCrop;
   eyeOverlaySrc: string | undefined;
   mouthCrop: MouthCrop;
   mouthOverlaySrc: string | undefined;
@@ -3294,7 +3320,7 @@ function AvatarImage({
   const src = primarySrc ?? staticSrc;
   const [displayedSrc, setDisplayedSrc] = useState(src);
   const blinkClipPath = getBlinkClipPath(blinkCrop);
-  const eyeClipPath = getBlinkClipPath(getEyeCrop(blinkCrop));
+  const eyeClipPath = getBlinkClipPath(eyeCrop);
   const mouthClipPath = getMouthClipPath(mouthCrop);
 
   useEffect(() => {
@@ -3506,6 +3532,40 @@ function getRuntimeLabel() {
   return "Browser";
 }
 
+function usePreloadAvatarImages(settings: Settings) {
+  useEffect(() => {
+    const displaySettings = withBundledDemoOverlays(settings);
+    const sources = new Set<string>(
+      reactions.map(({ key }) => settings.images[key] ?? publicAssetUrl(`reactions/${key}.png`)),
+    );
+
+    [
+      displaySettings.normalBlinkImage,
+      displaySettings.eyeImages.lookLeft,
+      displaySettings.eyeImages.lookRight,
+      displaySettings.mouthImages.smallOpen,
+      displaySettings.mouthImages.wideOpen,
+    ].forEach((source) => {
+      if (source) sources.add(source);
+    });
+
+    const preloadedImages = [...sources].map((source) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = source;
+      void image.decode().catch(() => undefined);
+      return image;
+    });
+
+    return () => {
+      preloadedImages.forEach((image) => {
+        image.onload = null;
+        image.onerror = null;
+      });
+    };
+  }, [settings]);
+}
+
 function PerfOverlay({ debug, options, route }: { debug: TrackingDebug; options: PerfOptions; route: AppRoute }) {
   const metrics = usePerfMetrics(options.enabled);
   const flags = [
@@ -3577,6 +3637,9 @@ function SettingsPanel({
 }: SettingsPanelProps) {
   const [imageMessage, setImageMessage] = useState("");
   const lifeMode = getLifeMode(settings);
+  const demoMode = usesBundledDemoNormal(settings);
+  const activeBlinkCrop = getActiveBlinkCrop(settings);
+  const activeMouthCrop = getActiveMouthCrop(settings);
   const updateBlinkCrop = (patch: Partial<BlinkCrop>) => {
     onChange({ blinkCrop: clampBlinkCrop({ ...settings.blinkCrop, ...patch }) });
   };
@@ -4069,8 +4132,8 @@ function SettingsPanel({
           <span>
             通常まばたき
             <small>normal の目閉じ差分</small>
-            <small className={settings.normalBlinkImage ? "savedBadge" : "emptyBadge"}>
-              {settings.normalBlinkImage ? "登録済み" : "未登録"}
+            <small className={settings.normalBlinkImage ? "savedBadge" : demoMode ? "demoBadge" : "emptyBadge"}>
+              {settings.normalBlinkImage ? "登録済み" : demoMode ? "デモ使用中" : "未登録"}
             </small>
           </span>
           <div className="fileActions">
@@ -4103,8 +4166,8 @@ function SettingsPanel({
               <span>
                 {item.label}
                 <small>{item.file}</small>
-                <small className={settings.eyeImages[item.key] ? "savedBadge" : "emptyBadge"}>
-                  {settings.eyeImages[item.key] ? "登録済み" : "未登録"}
+                <small className={settings.eyeImages[item.key] ? "savedBadge" : demoMode ? "demoBadge" : "emptyBadge"}>
+                  {settings.eyeImages[item.key] ? "登録済み" : demoMode ? "デモ使用中" : "未登録"}
                 </small>
               </span>
               <div className="fileActions">
@@ -4135,37 +4198,45 @@ function SettingsPanel({
         </div>
         <h3 className="sectionSubhead">範囲調整</h3>
         <div className="rangeGroup">
-          <p className="hint">黄色い枠を通常画像の目元に合わせてください。</p>
+          <p className="hint">
+            {demoMode
+              ? "デモ素材の目元範囲は自動調整されています。自分の通常画像を登録すると、保存済みの調整値へ戻ります。"
+              : "黄色い枠を通常画像の目元に合わせてください。"}
+          </p>
           <Range
+            disabled={demoMode}
             label="目元 X"
             min={0}
             max={98}
             step={1}
-            value={settings.blinkCrop.x}
+            value={activeBlinkCrop.x}
             onChange={(x) => updateBlinkCrop({ x })}
           />
           <Range
+            disabled={demoMode}
             label="目元 Y"
             min={0}
             max={98}
             step={1}
-            value={settings.blinkCrop.y}
+            value={activeBlinkCrop.y}
             onChange={(y) => updateBlinkCrop({ y })}
           />
           <Range
+            disabled={demoMode}
             label="目元 幅"
             min={1}
             max={100}
             step={1}
-            value={settings.blinkCrop.width}
+            value={activeBlinkCrop.width}
             onChange={(width) => updateBlinkCrop({ width })}
           />
           <Range
+            disabled={demoMode}
             label="目元 高さ"
             min={1}
             max={100}
             step={1}
-            value={settings.blinkCrop.height}
+            value={activeBlinkCrop.height}
             onChange={(height) => updateBlinkCrop({ height })}
           />
         </div>
@@ -4229,8 +4300,8 @@ function SettingsPanel({
               <span>
                 {item.label}
                 <small>{item.file}</small>
-                <small className={settings.mouthImages[item.key] ? "savedBadge" : "emptyBadge"}>
-                  {settings.mouthImages[item.key] ? "登録済み" : "未登録"}
+                <small className={settings.mouthImages[item.key] ? "savedBadge" : demoMode ? "demoBadge" : "emptyBadge"}>
+                  {settings.mouthImages[item.key] ? "登録済み" : demoMode ? "デモ使用中" : "未登録"}
                 </small>
               </span>
               <div className="fileActions">
@@ -4260,37 +4331,45 @@ function SettingsPanel({
           ))}
         </div>
         <div className="rangeGroup">
-          <p className="hint">オレンジ枠を通常画像の口元に合わせてください。通常口は normal.png をそのまま使います。</p>
+          <p className="hint">
+            {demoMode
+              ? "デモ素材の口元範囲は自動調整されています。自分の通常画像を登録すると、保存済みの調整値へ戻ります。"
+              : "オレンジ枠を通常画像の口元に合わせてください。通常口は normal.png をそのまま使います。"}
+          </p>
           <Range
+            disabled={demoMode}
             label="口元 X"
             min={0}
             max={98}
             step={1}
-            value={settings.mouthCrop.x}
+            value={activeMouthCrop.x}
             onChange={(x) => updateMouthCrop({ x })}
           />
           <Range
+            disabled={demoMode}
             label="口元 Y"
             min={0}
             max={98}
             step={1}
-            value={settings.mouthCrop.y}
+            value={activeMouthCrop.y}
             onChange={(y) => updateMouthCrop({ y })}
           />
           <Range
+            disabled={demoMode}
             label="口元 幅"
             min={1}
             max={100}
             step={1}
-            value={settings.mouthCrop.width}
+            value={activeMouthCrop.width}
             onChange={(width) => updateMouthCrop({ width })}
           />
           <Range
+            disabled={demoMode}
             label="口元 高さ"
             min={1}
             max={100}
             step={1}
-            value={settings.mouthCrop.height}
+            value={activeMouthCrop.height}
             onChange={(height) => updateMouthCrop({ height })}
           />
         </div>
@@ -4544,6 +4623,7 @@ function Status({ label, value }: { label: string; value: string }) {
 }
 
 function Range({
+  disabled = false,
   label,
   min,
   max,
@@ -4551,6 +4631,7 @@ function Range({
   value,
   onChange,
 }: {
+  disabled?: boolean;
   label: string;
   min: number;
   max: number;
@@ -4566,6 +4647,7 @@ function Range({
       </span>
       <input
         type="range"
+        disabled={disabled}
         min={min}
         max={max}
         step={step}
