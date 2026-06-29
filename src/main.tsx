@@ -312,8 +312,14 @@ const lifeModeOptions: Array<{ key: LifeMode; label: string }> = [
   { key: "check", label: "確認用" },
 ];
 
-const legacyDefaultBlinkCrop: BlinkCrop = { x: 34, y: 19, width: 28, height: 12 };
-const legacyDefaultMouthCrop: MouthCrop = { x: 43, y: 35, width: 15, height: 9 };
+const legacyDefaultBlinkCrops: BlinkCrop[] = [
+  { x: 34, y: 19, width: 28, height: 12 },
+  { x: 39, y: 20, width: 25, height: 13 },
+];
+const legacyDefaultMouthCrops: MouthCrop[] = [
+  { x: 43, y: 35, width: 15, height: 9 },
+  { x: 44, y: 27, width: 14, height: 9 },
+];
 
 const sensitivityProfile: Record<
   Sensitivity,
@@ -389,19 +395,19 @@ const defaultSettings: Settings = {
   normalBlinkImage: undefined,
   eyeImages: {},
   blinkCrop: {
-    x: 39,
-    y: 20,
-    width: 25,
-    height: 13,
+    x: 40,
+    y: 17,
+    width: 18,
+    height: 9,
   },
   lipSyncEnabled: false,
   audioInputEnabled: false,
   mouthThreshold: 28,
   mouthCrop: {
     x: 44,
-    y: 27,
+    y: 26,
     width: 14,
-    height: 9,
+    height: 4,
   },
   mouthImages: {},
   images: {},
@@ -438,6 +444,10 @@ function isSameCrop(left: CropRect | undefined, right: CropRect) {
   );
 }
 
+function isLegacyCrop(crop: CropRect | undefined, legacyCrops: CropRect[]) {
+  return legacyCrops.some((legacyCrop) => isSameCrop(crop, legacyCrop));
+}
+
 function readSettings(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -449,10 +459,10 @@ function readSettings(): Settings {
       backgroundImage: undefined,
       normalBlinkImage: undefined,
       eyeImages: {},
-      blinkCrop: isSameCrop(parsed.blinkCrop, legacyDefaultBlinkCrop)
+      blinkCrop: isLegacyCrop(parsed.blinkCrop, legacyDefaultBlinkCrops)
         ? defaultSettings.blinkCrop
         : parsed.blinkCrop ?? defaultSettings.blinkCrop,
-      mouthCrop: isSameCrop(parsed.mouthCrop, legacyDefaultMouthCrop)
+      mouthCrop: isLegacyCrop(parsed.mouthCrop, legacyDefaultMouthCrops)
         ? defaultSettings.mouthCrop
         : parsed.mouthCrop ?? defaultSettings.mouthCrop,
       mouthImages: {},
@@ -2526,7 +2536,7 @@ async function drawRecordingFrame(
     if (eyeOverlaySrc) {
       try {
         const eyeOverlayImage = await loadCanvasImage(eyeOverlaySrc, imageCache);
-        drawCroppedOverlay(ctx, eyeOverlayImage, settings.blinkCrop, {
+        drawCroppedOverlay(ctx, eyeOverlayImage, getEyeCrop(settings.blinkCrop), {
           x: avatarX,
           y: avatarY,
           width: avatarWidth,
@@ -2671,6 +2681,16 @@ function getCropClipPath(crop: CropRect) {
 
 function getBlinkClipPath(crop: BlinkCrop) {
   return getCropClipPath(crop);
+}
+
+function getEyeCrop(crop: BlinkCrop): BlinkCrop {
+  // 視線差分は元の瞳を完全に覆うため、まばたき範囲より少し広く切り抜きます。
+  return clampBlinkCrop({
+    x: crop.x - 3,
+    y: crop.y - 2,
+    width: crop.width + 10,
+    height: crop.height + 6,
+  });
 }
 
 function getMouthClipPath(crop: MouthCrop) {
@@ -3204,8 +3224,8 @@ function AvatarStage({
             transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
           }}
         >
-          <div key={reaction} className="avatar">
-            <ReactionEffects disabled={perfOptions.noEffects} reaction={reaction} />
+          <div className="avatar">
+            <ReactionEffects key={reaction} disabled={perfOptions.noEffects} reaction={reaction} />
             <div className="avatarLifeLayer" style={lifeMotionStyle}>
               <div className={`avatarTalkLayer${reaction === "normal" && settings.lifeEnabled && settings.speechMotionEnabled && mouthShape !== "closed" ? " speaking" : ""}`}>
                 <AvatarImage
@@ -3272,14 +3292,30 @@ function AvatarImage({
 }) {
   const [failedSrc, setFailedSrc] = useState("");
   const src = primarySrc ?? staticSrc;
+  const [displayedSrc, setDisplayedSrc] = useState(src);
   const blinkClipPath = getBlinkClipPath(blinkCrop);
+  const eyeClipPath = getBlinkClipPath(getEyeCrop(blinkCrop));
   const mouthClipPath = getMouthClipPath(mouthCrop);
 
   useEffect(() => {
     setFailedSrc("");
-  }, [src]);
+    if (displayedSrc === src) return undefined;
 
-  if (failedSrc === src) {
+    let cancelled = false;
+    const nextImage = new Image();
+    nextImage.onload = () => {
+      if (!cancelled) setDisplayedSrc(src);
+    };
+    nextImage.onerror = () => {
+      if (!cancelled) setFailedSrc(src);
+    };
+    nextImage.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [displayedSrc, src]);
+
+  if (failedSrc === src && displayedSrc === src) {
     return (
       <div className="avatarPlaceholder">
         <strong>{reaction}.png</strong>
@@ -3292,10 +3328,10 @@ function AvatarImage({
     <div className="avatarImageWrap">
       <img
         className={`avatarImage outline-${outlineQuality}`}
-        src={src}
+        src={displayedSrc}
         alt={alt}
         draggable={false}
-        onError={() => setFailedSrc(src)}
+        onError={() => setFailedSrc(displayedSrc)}
         style={{
           ["--outline-width" as string]: outlineWidth,
         }}
@@ -3317,7 +3353,7 @@ function AvatarImage({
           alt=""
           aria-hidden="true"
           draggable={false}
-          style={{ clipPath: blinkClipPath }}
+          style={{ clipPath: eyeClipPath }}
         />
       )}
       {mouthOverlaySrc && (
