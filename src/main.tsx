@@ -257,7 +257,7 @@ const bundledDemoAssets = {
   },
 } as const;
 const bundledDemoBlinkCrop: BlinkCrop = { x: 39, y: 20, width: 25, height: 10 };
-const bundledDemoEyeCrop: BlinkCrop = { x: 39, y: 20, width: 25, height: 10 };
+const bundledDemoEyeCrop: BlinkCrop = { x: 37, y: 18, width: 31, height: 15 };
 const bundledDemoMouthCrop: MouthCrop = { x: 45, y: 29, width: 12, height: 6 };
 const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
 const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
@@ -3638,6 +3638,7 @@ function SettingsPanel({
   const [imageMessage, setImageMessage] = useState("");
   const lifeMode = getLifeMode(settings);
   const demoMode = usesBundledDemoNormal(settings);
+  const displaySettings = withBundledDemoOverlays(settings);
   const activeBlinkCrop = getActiveBlinkCrop(settings);
   const activeMouthCrop = getActiveMouthCrop(settings);
   const updateBlinkCrop = (patch: Partial<BlinkCrop>) => {
@@ -4507,8 +4508,8 @@ function SettingsPanel({
         <div className="statusGrid">
           <Status label="目線" value={getEyeDirectionLabel(gazeDebug.direction)} />
           <Status label="目線状態" value={gazeDebug.status} />
-          <Status label="目線左" value={gazeDebug.hasLeft ? "登録済み" : "未登録"} />
-          <Status label="目線右" value={gazeDebug.hasRight ? "登録済み" : "未登録"} />
+          <Status label="目線左" value={gazeDebug.hasLeft ? (demoMode && !settings.eyeImages.lookLeft ? "デモ" : "登録済み") : "未登録"} />
+          <Status label="目線右" value={gazeDebug.hasRight ? (demoMode && !settings.eyeImages.lookRight ? "デモ" : "登録済み") : "未登録"} />
           <Status label="目元範囲" value={gazeDebug.cropValid ? "有効" : "無効"} />
           <Status label="顔追従" value={getCameraFollowStatus(settings, cameraFollow)} />
           <Status label="追従X" value={cameraFollow.visible ? cameraFollow.x.toFixed(2) : "-"} />
@@ -4523,7 +4524,11 @@ function SettingsPanel({
           ))}
           <button
             type="button"
-            disabled={reaction !== "normal" || !settings.normalBlinkImage || !isValidBlinkCrop(settings.blinkCrop)}
+            disabled={
+              reaction !== "normal" ||
+              !displaySettings.normalBlinkImage ||
+              !isValidBlinkCrop(activeBlinkCrop)
+            }
             onClick={onManualBlink}
           >
             目閉じ
@@ -4534,8 +4539,8 @@ function SettingsPanel({
               reaction !== "normal" ||
               !settings.lifeEnabled ||
               !settings.gazeEnabled ||
-              !settings.eyeImages.lookLeft ||
-              !isValidBlinkCrop(settings.blinkCrop)
+              !displaySettings.eyeImages.lookLeft ||
+              !isValidBlinkCrop(getActiveEyeCrop(settings))
             }
             onClick={() => onManualGaze("lookLeft")}
           >
@@ -4547,8 +4552,8 @@ function SettingsPanel({
               reaction !== "normal" ||
               !settings.lifeEnabled ||
               !settings.gazeEnabled ||
-              !settings.eyeImages.lookRight ||
-              !isValidBlinkCrop(settings.blinkCrop)
+              !displaySettings.eyeImages.lookRight ||
+              !isValidBlinkCrop(getActiveEyeCrop(settings))
             }
             onClick={() => onManualGaze("lookRight")}
           >
@@ -4556,14 +4561,22 @@ function SettingsPanel({
           </button>
           <button
             type="button"
-            disabled={reaction !== "normal" || !settings.lipSyncEnabled || !getMouthOverlaySrc("smallOpen", settings.mouthImages)}
+            disabled={
+              reaction !== "normal" ||
+              !settings.lipSyncEnabled ||
+              !getMouthOverlaySrc("smallOpen", displaySettings.mouthImages)
+            }
             onClick={() => onManualMouth("smallOpen")}
           >
             小開き口
           </button>
           <button
             type="button"
-            disabled={reaction !== "normal" || !settings.lipSyncEnabled || !getMouthOverlaySrc("wideOpen", settings.mouthImages)}
+            disabled={
+              reaction !== "normal" ||
+              !settings.lipSyncEnabled ||
+              !getMouthOverlaySrc("wideOpen", displaySettings.mouthImages)
+            }
             onClick={() => onManualMouth("wideOpen")}
           >
             大開き口
