@@ -305,6 +305,14 @@ button:disabled:hover {
   z-index: 3;
 }
 
+.eyeOverlayMatte {
+  position: absolute;
+  z-index: 3;
+  display: block;
+  background: #fff;
+  pointer-events: none;
+}
+
 .mouthOverlayImage {
   z-index: 4;
 }

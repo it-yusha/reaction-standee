@@ -259,6 +259,7 @@ const bundledDemoAssets = {
 const bundledDemoBlinkCrop: BlinkCrop = { x: 39, y: 20, width: 25, height: 10 };
 const bundledDemoEyeCrop: BlinkCrop = { x: 37, y: 18, width: 31, height: 15 };
 const bundledDemoMouthCrop: MouthCrop = { x: 45, y: 29, width: 12, height: 6 };
+const bundledDemoRightEyeMatte: CropRect = { x: 53.27, y: 23.44, width: 4.63, height: 5.26 };
 const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
 const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -2555,6 +2556,19 @@ async function drawRecordingFrame(
       try {
         const eyeOverlayImage = await loadCanvasImage(eyeOverlaySrc, imageCache);
         const eyeCrop = visualState.isBlinking ? activeBlinkCrop : activeEyeCrop;
+        if (
+          usesBundledDemoNormal(settings) &&
+          !visualState.isBlinking &&
+          visualState.eyeDirection === "lookRight"
+        ) {
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(
+            avatarX + avatarWidth * (bundledDemoRightEyeMatte.x / 100),
+            avatarY + avatarHeight * (bundledDemoRightEyeMatte.y / 100),
+            avatarWidth * (bundledDemoRightEyeMatte.width / 100),
+            avatarHeight * (bundledDemoRightEyeMatte.height / 100),
+          );
+        }
         drawCroppedOverlay(ctx, eyeOverlayImage, eyeCrop, {
           x: avatarX,
           y: avatarY,
@@ -3186,6 +3200,8 @@ function AvatarStage({
       ? getEyeOverlaySrc(eyeDirection, displaySettings.eyeImages)
       : undefined;
   const showEyeOverlay = !perfOptions.noOverlays && Boolean(eyeOverlaySrc) && isValidBlinkCrop(activeEyeCrop);
+  const showDemoRightEyeMatte =
+    usesBundledDemoNormal(settings) && eyeDirection === "lookRight" && showEyeOverlay;
   const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, displaySettings.mouthImages) : undefined;
   const showMouthOverlay =
     reaction === "normal" &&
@@ -3266,6 +3282,7 @@ function AvatarStage({
                   showBlinkGuide={showBlinkGuide}
                   showBlinkOverlay={showBlinkOverlay}
                   showEyeOverlay={showEyeOverlay}
+                  showEyeMatte={showDemoRightEyeMatte}
                   showMouthGuide={showMouthGuide}
                   showMouthOverlay={showMouthOverlay}
                   staticSrc={staticImage}
@@ -3294,6 +3311,7 @@ function AvatarImage({
   showBlinkGuide,
   showBlinkOverlay,
   showEyeOverlay,
+  showEyeMatte,
   showMouthGuide,
   showMouthOverlay,
   staticSrc,
@@ -3312,6 +3330,7 @@ function AvatarImage({
   showBlinkGuide: boolean;
   showBlinkOverlay: boolean;
   showEyeOverlay: boolean;
+  showEyeMatte: boolean;
   showMouthGuide: boolean;
   showMouthOverlay: boolean;
   staticSrc: string;
@@ -3373,14 +3392,28 @@ function AvatarImage({
         />
       )}
       {eyeOverlaySrc && (
-        <img
-          className={`eyeOverlayImage${showEyeOverlay ? " visible" : ""}`}
-          src={eyeOverlaySrc}
-          alt=""
-          aria-hidden="true"
-          draggable={false}
-          style={{ clipPath: eyeClipPath }}
-        />
+        <>
+          {showEyeMatte && (
+            <span
+              className="eyeOverlayMatte"
+              aria-hidden="true"
+              style={{
+                left: `${bundledDemoRightEyeMatte.x}%`,
+                top: `${bundledDemoRightEyeMatte.y}%`,
+                width: `${bundledDemoRightEyeMatte.width}%`,
+                height: `${bundledDemoRightEyeMatte.height}%`,
+              }}
+            />
+          )}
+          <img
+            className={`eyeOverlayImage${showEyeOverlay ? " visible" : ""}`}
+            src={eyeOverlaySrc}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            style={{ clipPath: eyeClipPath }}
+          />
+        </>
       )}
       {mouthOverlaySrc && (
         <img
