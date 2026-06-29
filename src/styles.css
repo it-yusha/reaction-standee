@@ -280,7 +280,18 @@ button:disabled:hover {
     drop-shadow(0 34px 42px rgba(0, 0, 0, 0.32));
 }
 
-.avatarImage {
+.avatarImageLayer:not(.active) {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  opacity: 0;
+  filter: none;
+  animation: none;
+}
+
+.avatarImageLayer.active {
+  visibility: visible;
+  opacity: 1;
   animation: imageSettle 520ms ease-out both;
 }
 

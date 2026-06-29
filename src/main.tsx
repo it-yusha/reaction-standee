@@ -40,6 +40,8 @@ type PreloadedAvatarImage = {
   ready: Promise<boolean>;
 };
 
+type ReactionImageSources = Record<Reaction, string>;
+
 type BlinkCrop = CropRect;
 type MouthCrop = CropRect;
 
@@ -266,6 +268,11 @@ const bundledDemoEyeCrop: BlinkCrop = { x: 37, y: 18, width: 31, height: 15 };
 const bundledDemoMouthCrop: MouthCrop = { x: 45, y: 29, width: 12, height: 6 };
 const bundledDemoRightEyeMatte: CropRect = { x: 53.27, y: 23.44, width: 4.63, height: 5.26 };
 const avatarImagePreloadCache = new Map<string, PreloadedAvatarImage>();
+const reactionEffectSources = [
+  publicAssetUrl("effects/joy-sparkle-field.svg"),
+  publicAssetUrl("effects/surprised-shockwave.svg"),
+  publicAssetUrl("effects/explain-pointer-light.svg"),
+];
 const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
 const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -3211,7 +3218,6 @@ function AvatarStage({
   const eyeDirection = useIdleGaze(reaction, displaySettings, manualGazeRequest, cameraFollow);
   const [reactionStartedAt, setReactionStartedAt] = useState(() => performance.now());
   const lifeMotionStyle = useLifeV2Motion(reaction, settings, mouthShape, audioLevel, cameraFollow);
-  const image = settings.images[reaction];
   const showBlinkOverlay =
     !perfOptions.noOverlays &&
     reaction === "normal" &&
@@ -3245,7 +3251,19 @@ function AvatarStage({
   const size = useAvatarLayout ? settings.avatarSize : settings.size;
   const x = useAvatarLayout ? settings.avatarX : settings.x;
   const y = useAvatarLayout ? settings.avatarY : settings.y;
-  const staticImage = publicAssetUrl(`reactions/${reaction}.png`);
+  const reactionImageSources = useMemo(
+    () =>
+      Object.fromEntries(
+        reactions.map(({ key }) => [key, settings.images[key] ?? publicAssetUrl(`reactions/${key}.png`)]),
+      ) as ReactionImageSources,
+    [
+      settings.images.explain,
+      settings.images.joy,
+      settings.images.normal,
+      settings.images.surprised,
+      settings.images.troubled,
+    ],
+  );
   const frameBackground = perfOptions.noBackground ? "#090d14" : getFrameBackground(settings);
   const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
 
@@ -3306,15 +3324,14 @@ function AvatarStage({
                   mouthOverlaySrc={mouthOverlaySrc}
                   outlineQuality={settings.outlineQuality ?? "standard"}
                   outlineWidth={settings.outlineEnabled ? `${settings.outlineWidth}px` : "0px"}
-                  primarySrc={image}
                   reaction={reaction}
+                  reactionImageSources={reactionImageSources}
                   showBlinkGuide={showBlinkGuide}
                   showBlinkOverlay={showBlinkOverlay}
                   showEyeOverlay={showEyeOverlay}
                   showEyeMatte={showDemoRightEyeMatte}
                   showMouthGuide={showMouthGuide}
                   showMouthOverlay={showMouthOverlay}
-                  staticSrc={staticImage}
                 />
               </div>
             </div>
@@ -3335,15 +3352,14 @@ function AvatarImage({
   mouthOverlaySrc,
   outlineQuality,
   outlineWidth,
-  primarySrc,
   reaction,
+  reactionImageSources,
   showBlinkGuide,
   showBlinkOverlay,
   showEyeOverlay,
   showEyeMatte,
   showMouthGuide,
   showMouthOverlay,
-  staticSrc,
 }: {
   alt: string;
   blinkCrop: BlinkCrop;
@@ -3354,42 +3370,22 @@ function AvatarImage({
   mouthOverlaySrc: string | undefined;
   outlineQuality: OutlineQuality;
   outlineWidth: string;
-  primarySrc: string | undefined;
   reaction: Reaction;
+  reactionImageSources: ReactionImageSources;
   showBlinkGuide: boolean;
   showBlinkOverlay: boolean;
   showEyeOverlay: boolean;
   showEyeMatte: boolean;
   showMouthGuide: boolean;
   showMouthOverlay: boolean;
-  staticSrc: string;
 }) {
-  const [failedSrc, setFailedSrc] = useState("");
-  const src = primarySrc ?? staticSrc;
-  const [displayedSrc, setDisplayedSrc] = useState(src);
+  const [failedSources, setFailedSources] = useState<Set<string>>(() => new Set());
+  const activeSrc = reactionImageSources[reaction];
   const blinkClipPath = getBlinkClipPath(blinkCrop);
   const eyeClipPath = getBlinkClipPath(eyeCrop);
   const mouthClipPath = getMouthClipPath(mouthCrop);
 
-  useEffect(() => {
-    setFailedSrc("");
-    if (displayedSrc === src) return undefined;
-
-    let cancelled = false;
-    void preloadAvatarImage(src).ready.then((loaded) => {
-      if (cancelled) return;
-      if (loaded) {
-        setDisplayedSrc(src);
-      } else {
-        setFailedSrc(src);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [displayedSrc, src]);
-
-  if (failedSrc === src && displayedSrc === src) {
+  if (failedSources.has(activeSrc)) {
     return (
       <div className="avatarPlaceholder">
         <strong>{reaction}.png</strong>
@@ -3400,16 +3396,41 @@ function AvatarImage({
 
   return (
     <div className="avatarImageWrap">
-      <img
-        className={`avatarImage outline-${outlineQuality}`}
-        src={displayedSrc}
-        alt={alt}
-        draggable={false}
-        onError={() => setFailedSrc(displayedSrc)}
-        style={{
-          ["--outline-width" as string]: outlineWidth,
-        }}
-      />
+      {reactions.map(({ key }) => {
+        const source = reactionImageSources[key];
+        const active = key === reaction;
+        return (
+          <img
+            key={`${key}:${source}`}
+            className={`avatarImage avatarImageLayer outline-${outlineQuality}${active ? " active" : ""}`}
+            src={source}
+            alt={active ? alt : ""}
+            aria-hidden={active ? undefined : "true"}
+            decoding="async"
+            draggable={false}
+            fetchPriority={active ? "high" : "low"}
+            onError={() =>
+              setFailedSources((current) => {
+                if (current.has(source)) return current;
+                const next = new Set(current);
+                next.add(source);
+                return next;
+              })
+            }
+            onLoad={() =>
+              setFailedSources((current) => {
+                if (!current.has(source)) return current;
+                const next = new Set(current);
+                next.delete(source);
+                return next;
+              })
+            }
+            style={{
+              ["--outline-width" as string]: outlineWidth,
+            }}
+          />
+        );
+      })}
       {blinkOverlaySrc && (
         <img
           className={`blinkOverlayImage${showBlinkOverlay ? " visible" : ""}`}
@@ -3607,6 +3628,7 @@ function usePreloadAvatarImages(settings: Settings) {
       displaySettings.eyeImages.lookRight,
       displaySettings.mouthImages.smallOpen,
       displaySettings.mouthImages.wideOpen,
+      ...reactionEffectSources,
     ].forEach((source) => {
       if (source) nextSources.add(source);
     });
