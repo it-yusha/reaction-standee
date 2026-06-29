@@ -1,17 +1,9 @@
-# Reaction images
+# Bundled demo character
 
-This folder is reserved for optional static fallback reaction images.
+These PNG files provide the built-in "IT Yusha" demo character shown when a
+user has not registered their own images.
 
-The settings UI can store uploaded images in the browser. In local development,
-the app also mirrors them to `.reaction-standee/assets/` through the local Vite
-API so Safari, Chrome, WKWebView, and OBS-related views can share the same local
-assets more easily.
-
-GitHub Pages does not have that local API, so the public demo primarily uses the
-browser's own storage for uploaded images. If you want default images to be
-available without uploading them, place PNG files here using the names below.
-
-Recommended filenames:
+## Full-body reactions
 
 - `normal.png`
 - `joy.png`
@@ -19,5 +11,17 @@ Recommended filenames:
 - `troubled.png`
 - `explain.png`
 
-Do not commit private, paid, internal, or rights-uncleared character assets to
-this folder.
+## Normal-state overlays
+
+- `normal_blink.png`
+- `eyes_left.png`
+- `eyes_right.png`
+- `mouth_small_open.png`
+- `mouth_wide_open.png`
+
+The overlay files share the same canvas and composition as `normal.png`. The
+app clips only the configured eye or mouth region, so the rest of each image is
+not swapped during blinking, gaze changes, or lip sync.
+
+The character assets were created for this project's public demo. They are not
+licensed for separate redistribution or reuse outside Reaction Standee.

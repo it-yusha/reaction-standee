@@ -1082,6 +1082,16 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.demoAssetNotice {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border-left: 3px solid #60a5fa;
+  color: #dbeafe;
+  background: rgba(30, 64, 175, 0.2);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .fileActions {
   display: grid;
   grid-template-columns: 1fr auto;

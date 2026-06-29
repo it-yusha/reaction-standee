@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   FilesetResolver,
@@ -245,6 +245,17 @@ const SHARED_REACTION_EVENTS_URL = "/api/reaction/events";
 const SHARED_ASSETS_URL = "/api/assets";
 const SHARED_SETTINGS_URL = "/api/settings";
 const publicAssetUrl = (assetPath: string) => `${import.meta.env.BASE_URL}${assetPath.replace(/^\/+/, "")}`;
+const bundledDemoAssets = {
+  normalBlinkImage: "reactions/normal_blink.png",
+  eyeImages: {
+    lookLeft: "reactions/eyes_left.png",
+    lookRight: "reactions/eyes_right.png",
+  },
+  mouthImages: {
+    smallOpen: "reactions/mouth_small_open.png",
+    wideOpen: "reactions/mouth_wide_open.png",
+  },
+} as const;
 const localApiEnabled = import.meta.env.VITE_DEPLOY_TARGET !== "static";
 const pwaEnabled = import.meta.env.PROD && !localApiEnabled;
 const AVATAR_SYNC_INTERVAL_MS = 50;
@@ -300,6 +311,9 @@ const lifeModeOptions: Array<{ key: LifeMode; label: string }> = [
   { key: "strong", label: "強" },
   { key: "check", label: "確認用" },
 ];
+
+const legacyDefaultBlinkCrop: BlinkCrop = { x: 34, y: 19, width: 28, height: 12 };
+const legacyDefaultMouthCrop: MouthCrop = { x: 43, y: 35, width: 15, height: 9 };
 
 const sensitivityProfile: Record<
   Sensitivity,
@@ -375,23 +389,54 @@ const defaultSettings: Settings = {
   normalBlinkImage: undefined,
   eyeImages: {},
   blinkCrop: {
-    x: 34,
-    y: 19,
-    width: 28,
-    height: 12,
+    x: 39,
+    y: 20,
+    width: 25,
+    height: 13,
   },
   lipSyncEnabled: false,
   audioInputEnabled: false,
   mouthThreshold: 28,
   mouthCrop: {
-    x: 43,
-    y: 35,
-    width: 15,
+    x: 44,
+    y: 27,
+    width: 14,
     height: 9,
   },
   mouthImages: {},
   images: {},
 };
+
+function usesBundledDemoNormal(settings: Settings) {
+  return !settings.images.normal;
+}
+
+function withBundledDemoOverlays(settings: Settings): Settings {
+  if (!usesBundledDemoNormal(settings)) return settings;
+
+  return {
+    ...settings,
+    normalBlinkImage: settings.normalBlinkImage ?? publicAssetUrl(bundledDemoAssets.normalBlinkImage),
+    eyeImages: {
+      lookLeft: settings.eyeImages.lookLeft ?? publicAssetUrl(bundledDemoAssets.eyeImages.lookLeft),
+      lookRight: settings.eyeImages.lookRight ?? publicAssetUrl(bundledDemoAssets.eyeImages.lookRight),
+    },
+    mouthImages: {
+      smallOpen: settings.mouthImages.smallOpen ?? publicAssetUrl(bundledDemoAssets.mouthImages.smallOpen),
+      wideOpen: settings.mouthImages.wideOpen ?? publicAssetUrl(bundledDemoAssets.mouthImages.wideOpen),
+    },
+  };
+}
+
+function isSameCrop(left: CropRect | undefined, right: CropRect) {
+  return Boolean(
+    left &&
+      left.x === right.x &&
+      left.y === right.y &&
+      left.width === right.width &&
+      left.height === right.height,
+  );
+}
 
 function readSettings(): Settings {
   try {
@@ -404,6 +449,12 @@ function readSettings(): Settings {
       backgroundImage: undefined,
       normalBlinkImage: undefined,
       eyeImages: {},
+      blinkCrop: isSameCrop(parsed.blinkCrop, legacyDefaultBlinkCrop)
+        ? defaultSettings.blinkCrop
+        : parsed.blinkCrop ?? defaultSettings.blinkCrop,
+      mouthCrop: isSameCrop(parsed.mouthCrop, legacyDefaultMouthCrop)
+        ? defaultSettings.mouthCrop
+        : parsed.mouthCrop ?? defaultSettings.mouthCrop,
       mouthImages: {},
       images: {},
     };
@@ -2415,6 +2466,7 @@ async function drawRecordingFrame(
   imageCache: CanvasImageCache,
   metrics: RecordingFrameMetrics,
 ) {
+  const displaySettings = withBundledDemoOverlays(settings);
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
 
@@ -2466,9 +2518,9 @@ async function drawRecordingFrame(
   if (reaction === "normal" && isValidBlinkCrop(settings.blinkCrop)) {
     const eyeOverlaySrc =
       visualState.isBlinking && settings.blinkEnabled
-        ? settings.normalBlinkImage
+        ? displaySettings.normalBlinkImage
         : settings.gazeEnabled
-          ? getEyeOverlaySrc(visualState.eyeDirection, settings.eyeImages)
+          ? getEyeOverlaySrc(visualState.eyeDirection, displaySettings.eyeImages)
           : undefined;
 
     if (eyeOverlaySrc) {
@@ -2487,7 +2539,7 @@ async function drawRecordingFrame(
   }
 
   if (reaction === "normal" && settings.lipSyncEnabled && mouthShape !== "closed" && isValidMouthCrop(settings.mouthCrop)) {
-    const mouthOverlaySrc = getMouthOverlaySrc(mouthShape, settings.mouthImages);
+    const mouthOverlaySrc = getMouthOverlaySrc(mouthShape, displaySettings.mouthImages);
     if (mouthOverlaySrc) {
       try {
         const mouthOverlayImage = await loadCanvasImage(mouthOverlaySrc, imageCache);
@@ -3068,22 +3120,30 @@ function AvatarStage({
   settings: Settings;
   perfOptions: PerfOptions;
 }) {
-  const isBlinking = useNormalBlink(reaction, settings, manualBlinkSignal);
-  const eyeDirection = useIdleGaze(reaction, settings, manualGazeRequest, cameraFollow);
+  const displaySettings = useMemo(() => withBundledDemoOverlays(settings), [settings]);
+  const isBlinking = useNormalBlink(reaction, displaySettings, manualBlinkSignal);
+  const eyeDirection = useIdleGaze(reaction, displaySettings, manualGazeRequest, cameraFollow);
   const [reactionStartedAt, setReactionStartedAt] = useState(() => performance.now());
   const lifeMotionStyle = useLifeV2Motion(reaction, settings, mouthShape, audioLevel, cameraFollow);
   const image = settings.images[reaction];
   const showBlinkOverlay =
-    !perfOptions.noOverlays && reaction === "normal" && isBlinking && Boolean(settings.normalBlinkImage) && isValidBlinkCrop(settings.blinkCrop);
+    !perfOptions.noOverlays &&
+    reaction === "normal" &&
+    isBlinking &&
+    Boolean(displaySettings.normalBlinkImage) &&
+    isValidBlinkCrop(settings.blinkCrop);
   const showBlinkGuide =
     route === "settings" &&
     reaction === "normal" &&
     settings.adjustmentGuidesEnabled &&
     settings.blinkEnabled &&
-    Boolean(settings.normalBlinkImage);
-  const eyeOverlaySrc = reaction === "normal" && !isBlinking && settings.gazeEnabled ? getEyeOverlaySrc(eyeDirection, settings.eyeImages) : undefined;
+    Boolean(displaySettings.normalBlinkImage);
+  const eyeOverlaySrc =
+    reaction === "normal" && !isBlinking && settings.gazeEnabled
+      ? getEyeOverlaySrc(eyeDirection, displaySettings.eyeImages)
+      : undefined;
   const showEyeOverlay = !perfOptions.noOverlays && Boolean(eyeOverlaySrc) && isValidBlinkCrop(settings.blinkCrop);
-  const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, settings.mouthImages) : undefined;
+  const mouthOverlaySrc = reaction === "normal" ? getMouthOverlaySrc(mouthShape, displaySettings.mouthImages) : undefined;
   const showMouthOverlay =
     reaction === "normal" &&
     !perfOptions.noOverlays &&
@@ -3102,14 +3162,14 @@ function AvatarStage({
   const aspectRatioValue = getAspectRatioValue(settings.canvasAspectRatio);
 
   useEffect(() => {
-    onGazeDebug(getGazeDebug(reaction, settings, eyeDirection));
+    onGazeDebug(getGazeDebug(reaction, displaySettings, eyeDirection));
   }, [
     eyeDirection,
     onGazeDebug,
     reaction,
     settings.blinkCrop,
-    settings.eyeImages.lookLeft,
-    settings.eyeImages.lookRight,
+    displaySettings.eyeImages.lookLeft,
+    displaySettings.eyeImages.lookRight,
     settings.gazeEnabled,
     settings.lifeEnabled,
   ]);
@@ -3151,7 +3211,7 @@ function AvatarStage({
                 <AvatarImage
                   alt={label}
                   blinkCrop={settings.blinkCrop}
-                  blinkOverlaySrc={reaction === "normal" ? settings.normalBlinkImage : undefined}
+                  blinkOverlaySrc={reaction === "normal" ? displaySettings.normalBlinkImage : undefined}
                   eyeOverlaySrc={eyeOverlaySrc}
                   mouthCrop={settings.mouthCrop}
                   mouthOverlaySrc={mouthOverlaySrc}
@@ -3809,6 +3869,11 @@ function SettingsPanel({
       <section className="section">
         <h2>画像</h2>
         <p className="hint">透過済みPNGをそのまま登録します。背景抜きは外部の画像編集アプリで行ってください。</p>
+        {!settings.images.normal && (
+          <p className="demoAssetNotice">
+            デモキャラクターを表示中です。画像を登録すると、対応するデモ画像より優先して表示します。
+          </p>
+        )}
         <div className="fileActions backupActions">
           <button type="button" onClick={handleExportBackup}>
             設定一式を書き出す
