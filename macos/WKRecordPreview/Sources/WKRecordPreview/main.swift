@@ -15,6 +15,16 @@ final class DragRegionView: NSView {
   }
 }
 
+final class RecordingWindow: NSWindow {
+  override var canBecomeKey: Bool {
+    true
+  }
+
+  override var canBecomeMain: Bool {
+    true
+  }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
   private let recordURLString: String
   private let settingsURL = URL(string: "http://127.0.0.1:5173/settings")!
@@ -48,8 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     webView.translatesAutoresizingMaskIntoConstraints = false
 
     let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 900)
-    let preferredHeight = min(screenFrame.height - 80, 960)
-    let preferredWidth = preferredHeight * 9 / 16
+    let aspectUnit = floor(min(screenFrame.height - 80, 960) / 16)
+    let preferredHeight = aspectUnit * 16
+    let preferredWidth = aspectUnit * 9
     let windowFrame = NSRect(
       x: screenFrame.midX - preferredWidth / 2,
       y: screenFrame.midY - preferredHeight / 2,
@@ -57,17 +68,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
       height: preferredHeight
     )
 
-    let window = NSWindow(
+    let window = RecordingWindow(
       contentRect: windowFrame,
-      styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+      styleMask: [.borderless],
       backing: .buffered,
       defer: false
     )
-    window.title = "Reaction Standee Record"
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
     window.isMovableByWindowBackground = true
-    window.contentAspectRatio = NSSize(width: 9, height: 16)
+    window.hasShadow = false
+    window.isOpaque = true
     window.backgroundColor = NSColor.black
 
     let contentView = NSView()
