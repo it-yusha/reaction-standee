@@ -13,6 +13,16 @@ GitHub Pagesで公開しているWeb版です。
 - [Reaction Standeeを開く](https://it-yusha.github.io/reaction-standee/)
 - [録画表示を直接開く](https://it-yusha.github.io/reaction-standee/?route=record)
 
+### 設定画面での動作デモ
+
+設定画面でポーズを認識し、「通常」「喜び」「驚き」「困惑」「説明」の立ち絵へ切り替わる様子です。左下のカメラ映像にはプライバシー保護のためモザイクをかけています。
+
+![Reaction Standee設定画面の動作デモ](docs/media/reaction-standee-settings-demo.jpg)
+
+https://github.com/user-attachments/assets/309f8e1d-4683-4dd6-a56b-a369681bddbe
+
+### 立ち絵リアクションのデモ
+
 ![Reaction Standeeのデモキャラクターとリアクション](docs/media/reaction-standee-demo.gif)
 
 画像を登録していない状態では、同梱のオリジナルデモキャラクター「IT勇者」が自動表示されます。カメラを使わなくても、設定画面下部のデバッグボタンで各リアクション、まばたき、目線、口形を確認できます。
