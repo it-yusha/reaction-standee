@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 const reactions = new Set(["normal", "joy", "surprised", "troubled", "explain"]);
@@ -255,6 +257,40 @@ export default defineConfig({
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
           const pathname = req.url?.split("?")[0];
+          if (pathname === "/api/wk-record-window" || pathname === "/api/wk-record-window/") {
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.setHeader("Cache-Control", "no-store");
+            if (req.method !== "POST") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+
+            const origin = req.headers.origin;
+            if (origin && origin !== "http://127.0.0.1:5173") {
+              res.statusCode = 403;
+              res.end(JSON.stringify({ error: "Forbidden" }));
+              return;
+            }
+
+            const appPath = path.join(os.homedir(), "Applications", "ReactionStandeeWKPreview.app");
+            void fs
+              .access(appPath)
+              .then(() => {
+                const child = spawn("open", ["-n", appPath], {
+                  detached: true,
+                  stdio: "ignore",
+                });
+                child.unref();
+                res.end(JSON.stringify({ ok: true }));
+              })
+              .catch(() => {
+                res.statusCode = 404;
+                res.end(JSON.stringify({ error: "ReactionStandeeWKPreview.app is not installed" }));
+              });
+            return;
+          }
+
           if (pathname === "/api/settings" || pathname === "/api/settings/") {
             void handleSettingsRequest(req, res);
             return;

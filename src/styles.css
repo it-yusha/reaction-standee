@@ -863,6 +863,16 @@ button:disabled:hover {
   font-size: 13px;
 }
 
+.desktopLaunchNote small {
+  display: block;
+  margin-top: 6px;
+  color: #b9c7da;
+}
+
+.desktopLaunchNote button {
+  width: 100%;
+}
+
 .section h2 {
   margin: 0 0 12px;
   font-size: 13px;

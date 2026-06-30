@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
   private let settingsURL = URL(string: "http://127.0.0.1:5173/settings")!
   private var window: NSWindow?
   private var webView: WKWebView?
+  private var statusLabel: NSTextField?
 
   override init() {
     recordURLString = CommandLine.arguments.dropFirst().first ?? "http://127.0.0.1:5173/record?camera=low&inferFps=30"
@@ -74,6 +75,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     contentView.layer?.backgroundColor = NSColor.black.cgColor
     contentView.addSubview(webView)
 
+    let statusLabel = NSTextField(labelWithString: "ローカルサーバーを起動しています...")
+    statusLabel.textColor = NSColor.white
+    statusLabel.font = NSFont.systemFont(ofSize: 16, weight: .medium)
+    statusLabel.alignment = .center
+    statusLabel.translatesAutoresizingMaskIntoConstraints = false
+    contentView.addSubview(statusLabel)
+
     let dragRegion = DragRegionView()
     dragRegion.translatesAutoresizingMaskIntoConstraints = false
     dragRegion.wantsLayer = true
@@ -85,6 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
       webView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
       webView.topAnchor.constraint(equalTo: contentView.topAnchor),
       webView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+      statusLabel.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+      statusLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
       dragRegion.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
       dragRegion.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
       dragRegion.topAnchor.constraint(equalTo: contentView.topAnchor),
@@ -98,7 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     self.window = window
     self.webView = webView
-    webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15))
+    self.statusLabel = statusLabel
+    ensureServerAndLoad(url)
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -114,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
       reloadRecordWindow()
       return
     }
-    webView?.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15))
+    loadRecordURL(url)
   }
 
   @objc private func openSettingsInSafari() {
@@ -129,12 +140,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     showLoadError(error)
   }
 
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    statusLabel?.isHidden = true
+  }
+
   private func showLoadError(_ error: Error) {
     let alert = NSAlert()
     alert.messageText = "Reaction Standeeを読み込めませんでした"
-    alert.informativeText = "\(error.localizedDescription)\n\n先に npm run dev -- --host 127.0.0.1 を起動してください。"
+    alert.informativeText = "\(error.localizedDescription)\n\n自動起動できなかった場合は、ログを確認してください。\n~/Library/Logs/ReactionStandee.log"
     alert.alertStyle = .warning
     alert.runModal()
+  }
+
+  private func ensureServerAndLoad(_ url: URL) {
+    checkServer { [weak self] ready in
+      guard let self else { return }
+      if ready {
+        self.loadRecordURL(url)
+        return
+      }
+
+      self.startLocalServer()
+      self.waitForServer(url, attempt: 0)
+    }
+  }
+
+  private func checkServer(completion: @escaping (Bool) -> Void) {
+    var request = URLRequest(url: settingsURL)
+    request.timeoutInterval = 1
+    URLSession.shared.dataTask(with: request) { _, response, _ in
+      let ready = (response as? HTTPURLResponse)?.statusCode == 200
+      DispatchQueue.main.async {
+        completion(ready)
+      }
+    }.resume()
+  }
+
+  private func startLocalServer() {
+    guard let scriptURL = Bundle.main.url(forResource: "start-server", withExtension: "sh") else {
+      showServerStartError("起動スクリプトが見つかりません。")
+      return
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/bash")
+    process.arguments = [scriptURL.path]
+    do {
+      try process.run()
+    } catch {
+      showServerStartError(error.localizedDescription)
+    }
+  }
+
+  private func waitForServer(_ url: URL, attempt: Int) {
+    guard attempt < 80 else {
+      showServerStartError("20秒以内にローカルサーバーを起動できませんでした。")
+      return
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+      self?.checkServer { ready in
+        guard let self else { return }
+        if ready {
+          self.loadRecordURL(url)
+        } else {
+          self.waitForServer(url, attempt: attempt + 1)
+        }
+      }
+    }
+  }
+
+  private func loadRecordURL(_ url: URL) {
+    statusLabel?.stringValue = "録画画面を読み込んでいます..."
+    statusLabel?.isHidden = false
+    webView?.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120))
+  }
+
+  private func showServerStartError(_ message: String) {
+    statusLabel?.stringValue = "ローカルサーバーを起動できませんでした"
+    let error = NSError(
+      domain: "ReactionStandeeWKPreview",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: message]
+    )
+    showLoadError(error)
   }
 
   private func buildMenu() {

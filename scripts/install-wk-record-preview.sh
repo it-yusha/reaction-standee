@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="ReactionStandeeWKPreview.app"
-SOURCE_APP="$ROOT_DIR/.build/wk-record-preview/$APP_NAME"
+SOURCE_APP="${TMPDIR:-/tmp}/reaction-standee-wk-record-preview/$APP_NAME"
 TARGET_DIR="$HOME/Applications"
 TARGET_APP="$TARGET_DIR/$APP_NAME"
 

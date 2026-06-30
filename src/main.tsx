@@ -3727,6 +3727,7 @@ function SettingsPanel({
   onNavigate,
 }: SettingsPanelProps) {
   const [imageMessage, setImageMessage] = useState("");
+  const [desktopLaunchMessage, setDesktopLaunchMessage] = useState("");
   const lifeMode = getLifeMode(settings);
   const demoMode = usesBundledDemoNormal(settings);
   const displaySettings = withBundledDemoOverlays(settings);
@@ -3737,6 +3738,18 @@ function SettingsPanel({
   };
   const updateMouthCrop = (patch: Partial<MouthCrop>) => {
     onChange({ mouthCrop: clampMouthCrop({ ...settings.mouthCrop, ...patch }) });
+  };
+
+  const openDesktopRecordWindow = () => {
+    setDesktopLaunchMessage("録画ウィンドウを起動中...");
+    void fetch("/api/wk-record-window", { method: "POST" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.text());
+        setDesktopLaunchMessage("録画ウィンドウを開きました。");
+      })
+      .catch(() => {
+        setDesktopLaunchMessage("録画アプリが見つかりません。先に npm run wk:install を実行してください。");
+      });
   };
 
   const handleImageUpload = (slot: ImageSlot, file: File | undefined) => {
@@ -4003,10 +4016,13 @@ function SettingsPanel({
       {localApiEnabled && (
         <section className="desktopLaunchNote" aria-label="WKWebView録画ウィンドウ起動">
           <div>
-            <strong>WKWebView録画ウィンドウ実験</strong>
-            <p>Safariに近いWebKit環境で、ツールバーなしの録画用ウィンドウを起動します。計測は npm run wk:record:perf です。</p>
+            <strong>Mac録画ウィンドウ</strong>
+            <p>ツールバーなしの録画画面を開きます。アプリを直接起動した場合は、ローカルサーバーも自動で準備します。</p>
+            {desktopLaunchMessage && <small>{desktopLaunchMessage}</small>}
           </div>
-          <code>npm run wk:record</code>
+          <button type="button" onClick={openDesktopRecordWindow}>
+            録画ウィンドウを開く
+          </button>
         </section>
       )}
 
